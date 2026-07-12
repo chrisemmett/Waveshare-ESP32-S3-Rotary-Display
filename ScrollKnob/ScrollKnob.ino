@@ -283,7 +283,9 @@ static void touchInit() {
 
 // Reads the current touch point. Returns true if a finger is down and fills
 // x/y with panel-pixel coordinates (0..359).
-static bool touchRead(int *x, int *y) {
+// NB: named tpRead(), not touchRead() - the ESP32 core defines a touchRead(pin)
+// macro for its built-in capacitive-touch pins, which would clash.
+static bool tpRead(int *x, int *y) {
   Wire.beginTransmission(CST816_ADDR);
   Wire.write(0x01);  // start at the gesture register
   if (Wire.endTransmission(true) != 0) return false;
@@ -307,7 +309,7 @@ static bool pollTap(int *x, int *y) {
   lastMs = now;
 
   int tx = 0, ty = 0;
-  bool down = touchRead(&tx, &ty);
+  bool down = tpRead(&tx, &ty);
   bool tap = down && !wasDown;
   wasDown = down;
   if (tap) {
