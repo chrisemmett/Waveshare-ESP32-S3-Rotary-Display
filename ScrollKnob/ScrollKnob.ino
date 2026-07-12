@@ -46,6 +46,17 @@
  * ---------------------------------------------------------------------------
  */
 
+// The ESP32 core (io_pin_remap.h, pulled in by Arduino.h) redefines pinMode /
+// digitalRead / digitalWrite as function-like macros on board profiles that
+// enable pin remapping. Arduino_GFX's I/O-expander databus headers declare
+// member methods with those exact names, and the macros rewrite them into code
+// that won't compile ("'digitalPinToGPIONumber' is not a type"). Undo the macros
+// before including the library. This board addresses pins by raw GPIO number and
+// ESP32-S3 remapping is identity, so bypassing it here is harmless. (#undef of an
+// undefined macro is a legal no-op, so this is also safe on non-remap boards.)
+#undef pinMode
+#undef digitalWrite
+#undef digitalRead
 #include <Arduino_GFX_Library.h>
 
 // ============================ Feature toggles ============================
@@ -56,6 +67,7 @@
 
 #if USE_BLE
 #include <NimBLEDevice.h>
+#include <NimBLEHIDDevice.h>  // NimBLEDevice.h does not pull this in (NimBLE 2.x)
 #include <Wire.h>
 #else
 // USB HID scroll wheel (only meaningful when USE_BLE == 0).

@@ -66,6 +66,14 @@ the instant you connect).
   still fine — it's just not required for HID here.
 - Switch back to USB by setting `USE_BLE 0`; NimBLE is then not needed.
 
+> **If it won't compile:** on some board profiles the ESP32 core turns
+> `pinMode` / `digitalRead` / `digitalWrite` into pin-remap macros, which clash
+> with Arduino_GFX's I/O-expander headers (`'digitalPinToGPIONumber' is not a
+> type`). The sketch `#undef`s those macros before including Arduino_GFX, so it
+> builds either way; selecting **ESP32S3 Dev Module** (no remap) also avoids it.
+> Separately, the ESP32 core's own `touchRead(pin)` macro is why the touch
+> reader here is called `tpRead()`.
+
 ## Flashing it
 
 This board is unusual to flash. Read [Lesson 1](#1-flashing-the-usb-port-talks-to-two-different-chips)
