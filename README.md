@@ -66,17 +66,24 @@ the instant you connect).
   still fine — it's just not required for HID here.
 - Switch back to USB by setting `USE_BLE 0`; NimBLE is then not needed.
 
-> **If it won't compile — `'digitalPinToGPIONumber' is not a type`:** this is an
-> Arduino_GFX ↔ ESP32-core incompatibility, not a Bluetooth issue (it breaks USB
-> mode too). Some board profiles define `BOARD_HAS_PIN_REMAP`, which makes the
+> **Compiling — `'digitalPinToGPIONumber' is not a type` (handled for you):**
+> this is an Arduino_GFX ↔ ESP32-core incompatibility, not a Bluetooth issue (it
+> breaks USB mode too). Board profiles that define `BOARD_HAS_PIN_REMAP` make the
 > core turn `pinMode` / `digitalRead` / `digitalWrite` into macros that clash
-> with Arduino_GFX's I/O-expander headers. The fix is a global build setting, so
-> **select the "ESP32S3 Dev Module" board** (its `esp32s3` variant does *not*
-> enable remapping) rather than a vendor-specific profile. If you must keep a
-> remap-enabled profile, define `BOARD_USES_HW_GPIO_NUMBERS` for the whole build
-> (e.g. arduino-cli `--build-property
-> "compiler.cpp.extra_flags=-DBOARD_USES_HW_GPIO_NUMBERS"`); a `#define` in the
-> sketch is **not** enough, because Arduino_GFX compiles as its own unit.
+> with Arduino_GFX's I/O-expander headers. The fix must apply to the *whole*
+> build (Arduino_GFX compiles as its own unit, so a sketch `#undef`/`#define`
+> can't fix it). The sketch folder therefore ships a
+> [`build_opt.h`](ScrollKnob/build_opt.h) containing
+> `-DBOARD_USES_HW_GPIO_NUMBERS`; Arduino copies it into every compile command,
+> which disables the remap macros globally — **so it should just compile, on any
+> board.**
+>
+> If your toolchain ignores `build_opt.h`, fall back to either: **select the
+> "ESP32S3 Dev Module" board** (its `esp32s3` variant doesn't enable remapping),
+> or pass the flag yourself — arduino-cli `--build-property
+> "compiler.cpp.extra_flags=-DBOARD_USES_HW_GPIO_NUMBERS"`. (Arduino IDE 2.x may
+> ask you to allow the sketch's build options the first time, and needs a clean
+> rebuild to pick the file up.)
 >
 > Separately, the ESP32 core's own `touchRead(pin)` macro (also remap-gated) is
 > why the touch reader here is called `tpRead()`.

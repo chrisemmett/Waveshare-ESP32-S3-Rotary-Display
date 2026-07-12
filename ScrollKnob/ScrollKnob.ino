@@ -46,11 +46,14 @@
  * ---------------------------------------------------------------------------
  */
 
-// NOTE: build this with a board profile that does NOT enable pin remapping
-// (e.g. "ESP32S3 Dev Module"). A profile that defines BOARD_HAS_PIN_REMAP makes
-// the ESP32 core rewrite pinMode/digitalRead/digitalWrite into macros that
-// collide with Arduino_GFX's I/O-expander headers and fail to compile
-// ("'digitalPinToGPIONumber' is not a type"). See the README for details.
+// PIN-REMAP GUARD: this sketch ships a build_opt.h (same folder) that globally
+// defines BOARD_USES_HW_GPIO_NUMBERS. That stops the ESP32 core from turning
+// pinMode/digitalRead/digitalWrite into "pin remap" macros on board profiles
+// that define BOARD_HAS_PIN_REMAP. Without it, those macros collide with
+// Arduino_GFX's I/O-expander headers and the build dies with
+// "'digitalPinToGPIONumber' is not a type". build_opt.h is applied to EVERY
+// translation unit including Arduino_GFX's own .cpp, which a sketch-level #undef
+// cannot reach. See the README if your toolchain ignores build_opt.h.
 #include <Arduino_GFX_Library.h>
 
 // ============================ Feature toggles ============================
