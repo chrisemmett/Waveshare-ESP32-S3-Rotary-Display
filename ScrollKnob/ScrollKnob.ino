@@ -1,43 +1,66 @@
 /*
- * ScrollKnob - turn the knob into a scroll wheel and show the scroll
- *              direction / speed on the round display.
+ * ScrollKnob - turn the knob into a scroll wheel.
  *
  * Target board : Waveshare ESP32-S3-Knob-Touch-LCD-1.8
- *                (panel module "JC3636K518": ST77916 QSPI LCD, 360x360)
+ *                (panel module "JC3636K518": ST77916 QSPI LCD, 360x360,
+ *                 CST816 capacitive touch)
  *
- * FIXES IN THIS REVISION (board bring-up)
- *   1. DISPLAY: the JC3636K518 panel needs the ST77916 "150" init sequence.
- *      Arduino_GFX's Arduino_ST77916 DEFAULTS to the "180" init, which produced
- *      a garbled screen. We now pass st77916_150_init_operations explicitly.
- *   2. ENCODER: the ESP32Encoder (hardware PCNT) path only registered one
- *      channel on this board (count never accumulated past +/-1). Replaced with
- *      an interrupt-driven quadrature decoder on the two GPIOs - the same
- *      polling-style approach the working community ESPHome config uses. This
- *      also can't drop counts during a screen redraw.
+ * Two build modes, selected by USE_BLE below:
+ *
+ *   USE_BLE 0  (USB)  - acts as a USB mouse wheel and shows the scroll
+ *                       direction / speed on the round display (original behaviour).
+ *
+ *   USE_BLE 1  (BLE)  - acts as a *Bluetooth Low Energy* mouse wheel:
+ *                        - While unpaired it advertises and the screen shows
+ *                          "DISCOVERABLE".
+ *                        - Once a host connects, the display + backlight turn OFF
+ *                          (the knob still scrolls).
+ *                        - Tapping the dark screen brings up a "DISCONNECT" button.
+ *                        - Tapping DISCONNECT forgets ALL Bluetooth bonds and drops
+ *                          the link (the host must re-pair).
+ *                        - If no button is tapped within 10 s, the screen turns off
+ *                          again.
+ *
+ * FIXES CARRIED FROM BOARD BRING-UP (see README "Lessons learned")
+ *   1. DISPLAY: the JC3636K518 panel needs the ST77916 "150" init sequence
+ *      (Arduino_ST77916 defaults to "180", which produced a garbled screen).
+ *   2. ENCODER: a debounced excursion decoder, not a textbook quadrature decoder,
+ *      because this knob rests at A=B=1 and drops a single channel per detent.
  *
  * ---------------------------------------------------------------------------
  * LIBRARIES (Arduino IDE -> Tools -> Manage Libraries...):
- *   1. "GFX Library for Arduino"  by moononournation   (provides ST77916 + QSPI)
- *   ESP32Encoder is no longer required.
- *   USB HID (optional, on by default) needs no extra library - it ships with
- *   the ESP32 Arduino core.
+ *   1. "GFX Library for Arduino"  by moononournation   (ST77916 + QSPI panel)
+ *   2. (BLE mode only) "NimBLE-Arduino" by h2zero, version 2.x
+ *                                          (BLE HID mouse; small footprint)
+ *   USB HID (USB mode only) needs no extra library - it ships with the core.
  *
  * BOARD SETTINGS (Arduino IDE -> Tools):
  *   Board:            "ESP32S3 Dev Module" (or the Waveshare profile)
  *   PSRAM:            "OPI PSRAM" / "Enabled"
  *   USB CDC On Boot:  "Enabled"            (keeps Serial working over USB)
- *   USB Mode:         "USB-OTG (TinyUSB)"  (REQUIRED for the HID scroll wheel)
+ *   USB Mode:         "USB-OTG (TinyUSB)"  (required for USB mode; harmless in BLE mode)
  *   Flash Size:       "16MB (128Mb)"
  *   Partition Scheme: any WITHOUT an "ESP SR ... MODEL" partition
- *                     (e.g. "16M Flash (3MB APP/9.9MB FATFS)")
+ *                     (e.g. "16M Flash (3MB APP/9.9MB FATFS)") - the 3MB app
+ *                     partition has room for the NimBLE stack.
  * ---------------------------------------------------------------------------
  */
 
 #include <Arduino_GFX_Library.h>
 
 // ============================ Feature toggles ============================
-// USB HID scroll wheel. On by default because you asked for a scroll wheel.
+// Master transport switch.
+//   1 = Bluetooth Low Energy mouse wheel (requires NimBLE-Arduino)
+//   0 = USB mouse wheel (original behaviour)
+#define USE_BLE 1
+
+#if USE_BLE
+#include <NimBLEDevice.h>
+#include <Wire.h>
+#else
+// USB HID scroll wheel (only meaningful when USE_BLE == 0).
 #define ENABLE_USB_HID 1
+#endif
 
 // Set to 1 to print live diagnostics (setup progress + encoder channels) over
 // Serial and add a 4 s boot delay. Handy while bringing the board up; leave at
@@ -57,44 +80,59 @@
 #define LCD_W 360
 #define LCD_H 360
 
+// Touch (CST816 capacitive controller, I2C)
+#define TP_SDA 11
+#define TP_SCL 12
+#define TP_INT 9
+#define TP_RST 10
+#define CST816_ADDR 0x15
+
 // Rotary encoder (the knob)
 #define ENC_A_PIN 8
 #define ENC_B_PIN 7
 
-// Push button (pressing the knob) - GPIO0, active low. Press to zero the count.
+// Push button (pressing the knob) - GPIO0, active low.
 #define BTN_PIN 0
 
 // ============================ Tunables ============================
 // The decoder emits exactly one count per physical detent click, so this is 1.
-// (If a click ever moves the on-screen number by more than 1, raise it to match.)
 #define PULSES_PER_DETENT 1
 
-#define VEL_WINDOW_MS 80      // how often speed is recomputed & UI redrawn
+#define VEL_WINDOW_MS 80      // how often speed is recomputed & UI redrawn (USB mode)
 #define WHEEL_INVERT false    // flip if scroll direction feels backwards
-#define VEL_FULL_SCALE 25.0f  // detents/sec that fills the speed bar (feel)
+#define VEL_FULL_SCALE 25.0f  // detents/sec that fills the speed bar (USB mode feel)
+
+// How long the DISCONNECT button stays up before the screen goes dark again.
+#define DISCONNECT_PROMPT_MS 10000
 
 // ============================ Colours (RGB565) ============================
 #define RGB565(r, g, b) ((uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)))
 static const uint16_t C_BG = RGB565(0, 0, 0);           // black
 static const uint16_t C_TITLE = RGB565(150, 150, 150);  // dim grey text
 static const uint16_t C_IDLE = RGB565(90, 90, 90);      // grey  - not moving
-static const uint16_t C_UP = RGB565(40, 200, 90);       // green - scrolling up
-static const uint16_t C_DOWN = RGB565(240, 140, 30);    // orange- scrolling down
+static const uint16_t C_UP = RGB565(40, 200, 90);       // green - scrolling up / discoverable
+static const uint16_t C_DOWN = RGB565(240, 140, 30);    // orange- scrolling down / disconnect
 static const uint16_t C_TRACK = RGB565(35, 35, 35);     // speed-bar background
+static const uint16_t C_WHITE = RGB565(255, 255, 255);  // button text
 
 // ============================ Types ============================
 // Declared up here (before any function) so the Arduino IDE's auto-generated
-// function prototypes, which it inserts before the first function, can see it.
+// function prototypes can see them.
 enum Dir { DIR_IDLE,
            DIR_UP,
            DIR_DOWN };
 
+#if USE_BLE
+// BLE-mode display states.
+enum BleUi { BLE_UI_DISCOVERABLE,  // unpaired, advertising, "DISCOVERABLE" on screen
+             BLE_UI_OFF,           // connected, screen + backlight dark
+             BLE_UI_PROMPT };      // connected, showing the DISCONNECT button
+#endif
+
 // ============================ Display objects ============================
 Arduino_DataBus *bus = new Arduino_ESP32QSPI(
   LCD_CS, LCD_SCK, LCD_D0, LCD_D1, LCD_D2, LCD_D3);
-// IMPORTANT: pass the "150" init sequence for the JC3636K518 panel. Without
-// this, Arduino_ST77916 uses its default "180" sequence and the screen is
-// garbled.
+// IMPORTANT: pass the "150" init sequence for the JC3636K518 panel (see README).
 Arduino_GFX *gfx = new Arduino_ST77916(
   bus, LCD_RST, 0 /* rotation */, true /* IPS */, LCD_W, LCD_H,
   0, 0, 0, 0,
@@ -102,21 +140,12 @@ Arduino_GFX *gfx = new Arduino_ST77916(
 
 // ============================ Encoder (debounced detent-excursion decoder) ============================
 // This knob rests at A=B=1 and, per physical click, briefly drops ONE channel
-// and returns WITHOUT completing a full quadrature cycle (it never reaches
-// A=B=0), so a textbook quadrature/Buxton decoder counts nothing. We instead
-// decode by excursion: the first channel to drop after rest sets the direction,
-// and we commit one count when the knob returns to rest.
-//
-// The important part is bounce rejection. After a click, the contacts twitch
-// and briefly tickle the OTHER channel, which used to register a false reverse
-// step. So we refuse to arm a new count until the knob has sat quietly at rest
-// for REST_QUIET_US - every stray edge pushes that deadline back, so a burst of
-// bounce can never start a count; only a real, deliberate turn can.
+// and returns WITHOUT completing a full quadrature cycle. See README "Lesson 4".
 #define REST_QUIET_US 5000  // require this much quiet-at-rest before a new count
 
-volatile long g_encPos = 0;          // accumulated detents (signed)
-volatile int8_t g_pendingDir = 0;    // direction of the click in progress (0 = none)
-volatile uint32_t g_restSinceUs = 0; // micros() of the most recent rest sighting
+volatile long g_encPos = 0;           // accumulated detents (signed)
+volatile int8_t g_pendingDir = 0;     // direction of the click in progress (0 = none)
+volatile uint32_t g_restSinceUs = 0;  // micros() of the most recent rest sighting
 
 static inline uint8_t readAB() {
   return (uint8_t)((digitalRead(ENC_A_PIN) << 1) | digitalRead(ENC_B_PIN));
@@ -126,12 +155,12 @@ void IRAM_ATTR encISR() {
   uint8_t ab = readAB();
   uint32_t nowUs = micros();
 
-  if (ab == 0b11) {              // at a detent (rest)
-    if (g_pendingDir != 0) {     // a real click just finished -> commit it
+  if (ab == 0b11) {           // at a detent (rest)
+    if (g_pendingDir != 0) {  // a real click just finished -> commit it
       g_encPos += g_pendingDir;
       g_pendingDir = 0;
     }
-    g_restSinceUs = nowUs;       // (re)start the quiet timer; bounce keeps resetting it
+    g_restSinceUs = nowUs;  // (re)start the quiet timer; bounce keeps resetting it
     return;
   }
 
@@ -144,7 +173,152 @@ void IRAM_ATTR encISR() {
   }
 }
 
-#if ENABLE_USB_HID
+// ============================ BLE HID mouse ============================
+#if USE_BLE
+// Standard HID report map: a 3-button mouse with X / Y / Wheel, Report ID 1.
+// The input report we send is 4 bytes: {buttons, dX, dY, wheel}. For scrolling
+// we only ever touch the wheel byte.
+static const uint8_t HID_REPORT_MAP[] = {
+  0x05, 0x01,  // Usage Page (Generic Desktop)
+  0x09, 0x02,  // Usage (Mouse)
+  0xA1, 0x01,  // Collection (Application)
+  0x85, 0x01,  //   Report ID (1)
+  0x09, 0x01,  //   Usage (Pointer)
+  0xA1, 0x00,  //   Collection (Physical)
+  0x05, 0x09,  //     Usage Page (Buttons)
+  0x19, 0x01,  //     Usage Minimum (1)
+  0x29, 0x03,  //     Usage Maximum (3)
+  0x15, 0x00,  //     Logical Minimum (0)
+  0x25, 0x01,  //     Logical Maximum (1)
+  0x95, 0x03,  //     Report Count (3)
+  0x75, 0x01,  //     Report Size (1)
+  0x81, 0x02,  //     Input (Data,Var,Abs) - 3 buttons
+  0x95, 0x01,  //     Report Count (1)
+  0x75, 0x05,  //     Report Size (5)
+  0x81, 0x03,  //     Input (Const)        - 5 bits padding
+  0x05, 0x01,  //     Usage Page (Generic Desktop)
+  0x09, 0x30,  //     Usage (X)
+  0x09, 0x31,  //     Usage (Y)
+  0x09, 0x38,  //     Usage (Wheel)
+  0x15, 0x81,  //     Logical Minimum (-127)
+  0x25, 0x7F,  //     Logical Maximum (127)
+  0x75, 0x08,  //     Report Size (8)
+  0x95, 0x03,  //     Report Count (3)
+  0x81, 0x06,  //     Input (Data,Var,Rel) - X, Y, Wheel
+  0xC0,        //   End Collection
+  0xC0         // End Collection
+};
+
+static NimBLEServer *bleServer = nullptr;
+static NimBLEHIDDevice *bleHid = nullptr;
+static NimBLECharacteristic *bleInput = nullptr;
+volatile bool g_connected = false;
+volatile uint16_t g_connHandle = 0;
+
+class ServerCallbacks : public NimBLEServerCallbacks {
+  void onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo) override {
+    g_connHandle = connInfo.getConnHandle();
+    g_connected = true;
+  }
+  void onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo, int reason) override {
+    g_connected = false;
+    // Go back to being discoverable so a host (this one again, or a new one)
+    // can pair.
+    NimBLEDevice::startAdvertising();
+  }
+};
+
+static void bleSetup() {
+  NimBLEDevice::init("ScrollKnob");
+  // Just-Works bonding (bond, no MITM, secure connections). A mouse has no
+  // display/keypad, so we advertise NoInputNoOutput and pair without a PIN.
+  NimBLEDevice::setSecurityAuth(true, false, true);
+  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+
+  bleServer = NimBLEDevice::createServer();
+  bleServer->setCallbacks(new ServerCallbacks());
+
+  bleHid = new NimBLEHIDDevice(bleServer);
+  bleInput = bleHid->getInputReport(1);  // report ID 1
+  bleHid->setManufacturer("DIY");
+  bleHid->setPnp(0x02, 0xe502, 0xa111, 0x0210);
+  bleHid->setHidInfo(0x00, 0x01);
+  bleHid->setReportMap((uint8_t *)HID_REPORT_MAP, sizeof(HID_REPORT_MAP));
+  bleHid->setBatteryLevel(100);
+  bleHid->startServices();
+
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  adv->setAppearance(0x03C2);  // HID mouse
+  adv->addServiceUUID(bleHid->getHidService()->getUUID());
+  adv->enableScanResponse(true);
+  NimBLEDevice::startAdvertising();
+}
+
+static void bleSendWheel(int8_t whl) {
+  if (!g_connected || bleInput == nullptr) return;
+  uint8_t report[4] = { 0, 0, 0, (uint8_t)whl };  // buttons, dX, dY, wheel
+  bleInput->setValue(report, sizeof(report));
+  bleInput->notify();
+}
+
+// Drop the current link AND forget every stored bond, so the host has to
+// re-pair from scratch. onDisconnect() then restarts advertising.
+static void bleForgetAll() {
+  NimBLEDevice::deleteAllBonds();
+  if (g_connected) {
+    bleServer->disconnect(g_connHandle);
+  }
+}
+
+// ============================ Touch (CST816) ============================
+static void touchInit() {
+  Wire.begin(TP_SDA, TP_SCL, 400000);
+  pinMode(TP_RST, OUTPUT);
+  digitalWrite(TP_RST, LOW);
+  delay(10);
+  digitalWrite(TP_RST, HIGH);
+  delay(50);  // controller boot time
+  pinMode(TP_INT, INPUT_PULLUP);
+}
+
+// Reads the current touch point. Returns true if a finger is down and fills
+// x/y with panel-pixel coordinates (0..359).
+static bool touchRead(int *x, int *y) {
+  Wire.beginTransmission(CST816_ADDR);
+  Wire.write(0x01);  // start at the gesture register
+  if (Wire.endTransmission(true) != 0) return false;
+  if (Wire.requestFrom((uint8_t)CST816_ADDR, (uint8_t)6) != 6) return false;
+  uint8_t d[6];
+  for (int i = 0; i < 6; i++) d[i] = Wire.read();
+  uint8_t fingers = d[1] & 0x0F;  // reg 0x02: number of touch points
+  if (fingers == 0) return false;
+  if (x) *x = ((d[2] & 0x0F) << 8) | d[3];  // reg 0x03/0x04: X
+  if (y) *y = ((d[4] & 0x0F) << 8) | d[5];  // reg 0x05/0x06: Y
+  return true;
+}
+
+// Detects a fresh finger-down (a "tap"), throttled and edge-triggered so one
+// press yields exactly one event. Fills x/y with where the finger landed.
+static bool pollTap(int *x, int *y) {
+  static uint32_t lastMs = 0;
+  static bool wasDown = false;
+  uint32_t now = millis();
+  if (now - lastMs < 20) return false;  // poll ~50 Hz
+  lastMs = now;
+
+  int tx = 0, ty = 0;
+  bool down = touchRead(&tx, &ty);
+  bool tap = down && !wasDown;
+  wasDown = down;
+  if (tap) {
+    if (x) *x = tx;
+    if (y) *y = ty;
+  }
+  return tap;
+}
+#endif  // USE_BLE
+
+#if !USE_BLE && ENABLE_USB_HID
 #include "USB.h"
 #include "USBHIDMouse.h"
 USBHIDMouse Mouse;
@@ -153,7 +327,9 @@ USBHIDMouse Mouse;
 // ============================ State ============================
 static long lastRaw = 0;      // last raw encoder count
 static long scrollAccum = 0;  // raw counts waiting to become HID steps
-static long velAccum = 0;     // raw counts inside the current speed window
+
+#if !USE_BLE
+static long velAccum = 0;  // raw counts inside the current speed window
 static uint32_t lastVelMs = 0;
 static float detentsPerSec = 0;  // signed: + one way, - the other
 
@@ -161,6 +337,7 @@ static float detentsPerSec = 0;  // signed: + one way, - the other
 static Dir drawnDir = (Dir)-1;
 static long drawnPos = 0x7FFFFFFF;
 static int drawnBar = -1;
+#endif
 
 // ============================ Small text helper ============================
 static void drawCentered(const char *s, int cx, int topY, uint8_t size,
@@ -174,6 +351,9 @@ static void drawCentered(const char *s, int cx, int topY, uint8_t size,
 
 // ============================ UI ============================
 static const int CX = LCD_W / 2;  // 180
+static const int CY = LCD_H / 2;  // 180
+
+#if !USE_BLE
 static const int ARROW_CY = 150;  // centre of the direction arrow
 static const int ARROW_HW = 62;   // arrow half-width / half-height
 static const int POS_TOPY = 232;  // top of the position number
@@ -238,6 +418,57 @@ static void render(Dir dir, long pos, float speed) {
     drawnBar = fillW;
   }
 }
+#endif  // !USE_BLE
+
+// ============================ BLE-mode UI ============================
+#if USE_BLE
+static BleUi bleUi = BLE_UI_DISCOVERABLE;
+static uint32_t promptSinceMs = 0;
+
+// The DISCONNECT button, centred on the round screen.
+#define DBTN_W 240
+#define DBTN_H 90
+static const int DBTN_X = (LCD_W - DBTN_W) / 2;  // 60
+static const int DBTN_Y = (LCD_H - DBTN_H) / 2;  // 135
+
+static bool inDisconnectBtn(int x, int y) {
+  return x >= DBTN_X && x < DBTN_X + DBTN_W && y >= DBTN_Y && y < DBTN_Y + DBTN_H;
+}
+
+static void drawDiscoverable() {
+  gfx->fillScreen(C_BG);
+  drawCentered("BLUETOOTH", CX, 110, 2, C_TITLE, C_BG);
+  drawCentered("DISCOVERABLE", CX, 150, 3, C_UP, C_BG);
+  drawCentered("pair from your PC", CX, 210, 1, C_TITLE, C_BG);
+}
+
+static void drawDisconnectPrompt() {
+  gfx->fillScreen(C_BG);
+  gfx->fillRoundRect(DBTN_X, DBTN_Y, DBTN_W, DBTN_H, 16, C_DOWN);
+  // vertically centre size-3 text (8*3 = 24px tall) inside the button
+  drawCentered("DISCONNECT", CX, DBTN_Y + (DBTN_H - 24) / 2, 3, C_WHITE, C_DOWN);
+}
+
+// State transitions. Each one both updates bleUi and drives the panel/backlight.
+static void bleShowDiscoverable() {
+  bleUi = BLE_UI_DISCOVERABLE;
+  drawDiscoverable();
+  digitalWrite(LCD_BL, HIGH);
+}
+
+static void bleGoDark() {
+  bleUi = BLE_UI_OFF;
+  gfx->fillScreen(C_BG);      // clear content so nothing shows if the LED glows
+  digitalWrite(LCD_BL, LOW);  // backlight off
+}
+
+static void bleShowPrompt() {
+  bleUi = BLE_UI_PROMPT;
+  promptSinceMs = millis();
+  drawDisconnectPrompt();
+  digitalWrite(LCD_BL, HIGH);
+}
+#endif  // USE_BLE
 
 // ============================ setup / loop ============================
 void setup() {
@@ -248,65 +479,92 @@ void setup() {
   Serial.println("=== DIAG: setup start ===");
 #endif
 
-  // --- Encoder: interrupt-driven quadrature on the two knob channels ---
+  // --- Encoder: interrupt-driven excursion decoder on the two knob channels ---
   pinMode(ENC_A_PIN, INPUT_PULLUP);
   pinMode(ENC_B_PIN, INPUT_PULLUP);
   g_restSinceUs = micros();  // start the quiet-at-rest timer
   attachInterrupt(digitalPinToInterrupt(ENC_A_PIN), encISR, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENC_B_PIN), encISR, CHANGE);
-#if DIAG
-  Serial.println("DIAG: encoder interrupts attached");
-#endif
 
   // --- Button ---
   pinMode(BTN_PIN, INPUT_PULLUP);
 
+  // --- Backlight (kept off until we decide what to show) ---
+  pinMode(LCD_BL, OUTPUT);
+  digitalWrite(LCD_BL, LOW);
+
+  // --- Display ---
+  gfx->begin();
+
+#if USE_BLE
+  touchInit();
+  bleSetup();
+  bleShowDiscoverable();  // advertising -> screen shows "DISCOVERABLE"
+#else
 #if ENABLE_USB_HID
   Mouse.begin();
   USB.begin();
-#if DIAG
-  Serial.println("DIAG: USB HID started");
 #endif
-#endif
-
-  // --- Display ---
-#if DIAG
-  Serial.println("DIAG: calling gfx->begin() ...");
-#endif
-  bool gfxOk = gfx->begin();
-#if DIAG
-  Serial.printf("DIAG: gfx->begin() returned %d\n", gfxOk);
-#endif
-  pinMode(LCD_BL, OUTPUT);
-  digitalWrite(LCD_BL, HIGH);  // backlight on
+  digitalWrite(LCD_BL, HIGH);
   drawStaticUI();
-#if DIAG
-  Serial.println("DIAG: static UI drawn");
+  lastVelMs = millis();
 #endif
 
-  lastVelMs = millis();
 #if DIAG
-  Serial.println("=== DIAG: setup DONE - turn the knob now ===");
+  Serial.println("=== DIAG: setup DONE ===");
 #endif
 }
 
 void loop() {
   // --- Read the knob (updated in the ISR) ---
   long raw = g_encPos;
-
-#if DIAG
-  static uint32_t dbgMs = 0;
-  if (millis() - dbgMs >= 250) {
-    dbgMs = millis();
-    Serial.printf("DIAG: raw=%ld A=%d B=%d btn=%d\n",
-                  raw, (int)digitalRead(ENC_A_PIN),
-                  (int)digitalRead(ENC_B_PIN), (int)digitalRead(BTN_PIN));
-  }
-#endif
-
   long delta = raw - lastRaw;
   lastRaw = raw;
 
+#if USE_BLE
+  // ---- Bluetooth mode ----
+  // Scroll only counts once a host is connected; drop motion while unpaired so
+  // it doesn't jump the moment we connect.
+  if (delta != 0) {
+    if (g_connected) {
+      scrollAccum += delta;
+      while (labs(scrollAccum) >= PULSES_PER_DETENT) {
+        int step = (scrollAccum > 0) ? 1 : -1;
+        int8_t whl = WHEEL_INVERT ? -step : step;  // +ve wheel scrolls up
+        bleSendWheel(whl);
+        scrollAccum -= step * PULSES_PER_DETENT;
+      }
+    } else {
+      scrollAccum = 0;
+    }
+  }
+
+  // Connection edges: connect -> screen off; disconnect -> discoverable.
+  static bool prevConn = false;
+  bool conn = g_connected;
+  if (conn && !prevConn) bleGoDark();
+  if (!conn && prevConn) bleShowDiscoverable();
+  prevConn = conn;
+
+  // Touch: wake to the DISCONNECT button, or act on a tap of it.
+  int tx = 0, ty = 0;
+  if (pollTap(&tx, &ty)) {
+    if (bleUi == BLE_UI_OFF) {
+      bleShowPrompt();  // dark screen tapped -> reveal the button
+    } else if (bleUi == BLE_UI_PROMPT && inDisconnectBtn(tx, ty)) {
+      bleForgetAll();  // onDisconnect() -> bleShowDiscoverable() on the next loop
+    }
+  }
+
+  // If the button sat untouched for the timeout, go dark again.
+  if (bleUi == BLE_UI_PROMPT && (millis() - promptSinceMs >= DISCONNECT_PROMPT_MS)) {
+    bleGoDark();
+  }
+
+  delay(2);
+  return;
+#else
+  // ---- USB mode (original behaviour) ----
   if (delta != 0) {
     velAccum += delta;
     scrollAccum += delta;
@@ -352,4 +610,5 @@ void loop() {
   }
 
   delay(2);
+#endif
 }
