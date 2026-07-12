@@ -66,13 +66,20 @@ the instant you connect).
   still fine — it's just not required for HID here.
 - Switch back to USB by setting `USE_BLE 0`; NimBLE is then not needed.
 
-> **If it won't compile:** on some board profiles the ESP32 core turns
-> `pinMode` / `digitalRead` / `digitalWrite` into pin-remap macros, which clash
-> with Arduino_GFX's I/O-expander headers (`'digitalPinToGPIONumber' is not a
-> type`). The sketch `#undef`s those macros before including Arduino_GFX, so it
-> builds either way; selecting **ESP32S3 Dev Module** (no remap) also avoids it.
-> Separately, the ESP32 core's own `touchRead(pin)` macro is why the touch
-> reader here is called `tpRead()`.
+> **If it won't compile — `'digitalPinToGPIONumber' is not a type`:** this is an
+> Arduino_GFX ↔ ESP32-core incompatibility, not a Bluetooth issue (it breaks USB
+> mode too). Some board profiles define `BOARD_HAS_PIN_REMAP`, which makes the
+> core turn `pinMode` / `digitalRead` / `digitalWrite` into macros that clash
+> with Arduino_GFX's I/O-expander headers. The fix is a global build setting, so
+> **select the "ESP32S3 Dev Module" board** (its `esp32s3` variant does *not*
+> enable remapping) rather than a vendor-specific profile. If you must keep a
+> remap-enabled profile, define `BOARD_USES_HW_GPIO_NUMBERS` for the whole build
+> (e.g. arduino-cli `--build-property
+> "compiler.cpp.extra_flags=-DBOARD_USES_HW_GPIO_NUMBERS"`); a `#define` in the
+> sketch is **not** enough, because Arduino_GFX compiles as its own unit.
+>
+> Separately, the ESP32 core's own `touchRead(pin)` macro (also remap-gated) is
+> why the touch reader here is called `tpRead()`.
 
 ## Flashing it
 
@@ -96,7 +103,7 @@ the CST816 touch panel is driven inline (no touch library needed either).
 
 | Setting | Value |
 |---|---|
-| Board | **ESP32S3 Dev Module** (or the Waveshare profile) |
+| Board | **ESP32S3 Dev Module** — prefer this over a vendor-specific profile; some enable pin remapping, which breaks the Arduino_GFX build (see the compile note above) |
 | PSRAM | **OPI PSRAM** / Enabled |
 | USB CDC On Boot | **Enabled** |
 | USB Mode | **USB-OTG (TinyUSB)** ← required for USB mode; harmless in Bluetooth mode |

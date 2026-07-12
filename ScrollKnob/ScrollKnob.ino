@@ -46,17 +46,11 @@
  * ---------------------------------------------------------------------------
  */
 
-// The ESP32 core (io_pin_remap.h, pulled in by Arduino.h) redefines pinMode /
-// digitalRead / digitalWrite as function-like macros on board profiles that
-// enable pin remapping. Arduino_GFX's I/O-expander databus headers declare
-// member methods with those exact names, and the macros rewrite them into code
-// that won't compile ("'digitalPinToGPIONumber' is not a type"). Undo the macros
-// before including the library. This board addresses pins by raw GPIO number and
-// ESP32-S3 remapping is identity, so bypassing it here is harmless. (#undef of an
-// undefined macro is a legal no-op, so this is also safe on non-remap boards.)
-#undef pinMode
-#undef digitalWrite
-#undef digitalRead
+// NOTE: build this with a board profile that does NOT enable pin remapping
+// (e.g. "ESP32S3 Dev Module"). A profile that defines BOARD_HAS_PIN_REMAP makes
+// the ESP32 core rewrite pinMode/digitalRead/digitalWrite into macros that
+// collide with Arduino_GFX's I/O-expander headers and fail to compile
+// ("'digitalPinToGPIONumber' is not a type"). See the README for details.
 #include <Arduino_GFX_Library.h>
 
 // ============================ Feature toggles ============================
