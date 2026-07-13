@@ -88,6 +88,11 @@
 #define LCD_BL 47  // backlight
 #define LCD_W 360
 #define LCD_H 360
+// Panel orientation passed to Arduino_GFX: 0 = normal, 1/2/3 = 90/180/270 deg.
+// Set to 2 to mount the board upside-down and still read right-side-up. NB: the
+// touch controller reports RAW panel coordinates, so tpRead() mirrors them to
+// match whenever this is 2 (see the guard there).
+#define LCD_ROTATION 2
 
 // Touch (CST816 capacitive controller, I2C)
 #define TP_SDA 11
@@ -143,7 +148,7 @@ Arduino_DataBus *bus = new Arduino_ESP32QSPI(
   LCD_CS, LCD_SCK, LCD_D0, LCD_D1, LCD_D2, LCD_D3);
 // IMPORTANT: pass the "150" init sequence for the JC3636K518 panel (see README).
 Arduino_GFX *gfx = new Arduino_ST77916(
-  bus, LCD_RST, 0 /* rotation */, true /* IPS */, LCD_W, LCD_H,
+  bus, LCD_RST, LCD_ROTATION /* rotation */, true /* IPS */, LCD_W, LCD_H,
   0, 0, 0, 0,
   st77916_150_init_operations, sizeof(st77916_150_init_operations));
 
@@ -305,6 +310,13 @@ static bool tpRead(int *x, int *y) {
   if (fingers == 0) return false;
   if (x) *x = ((d[2] & 0x0F) << 8) | d[3];  // reg 0x03/0x04: X
   if (y) *y = ((d[4] & 0x0F) << 8) | d[5];  // reg 0x05/0x06: Y
+#if LCD_ROTATION == 2
+  // The CST816 reports raw panel coordinates that never pass through the GFX
+  // rotation, so with the display flipped 180 the axes must be mirrored here to
+  // stay aligned with what's drawn (a 180 flip mirrors both axes, no swap).
+  if (x) *x = (LCD_W - 1) - *x;
+  if (y) *y = (LCD_H - 1) - *y;
+#endif
   return true;
 }
 
@@ -433,8 +445,24 @@ static void render(Dir dir, long pos, float speed) {
 
 // ============================ BLE-mode UI ============================
 #if USE_BLE
+#include "sprites.h"  // running-man run cycle (RUN_FRAMES, drawSprite)
+
 static BleUi bleUi = BLE_UI_DISCOVERABLE;
 static uint32_t promptSinceMs = 0;
+
+// ---- Idle running-man animation ----
+// Shown while the screen is dark (BLE_UI_OFF, i.e. connected) AND the knob is
+// being turned. Frames advance with the wheel (faster turning = faster running)
+// and the runner mirrors to the scroll direction. After RUN_IDLE_MS of no
+// motion the screen blanks again. bleUi stays BLE_UI_OFF the whole time so the
+// existing tap-to-DISCONNECT path keeps working.
+static bool g_running = false;         // runner currently on screen
+static uint32_t lastRunMotionMs = 0;   // millis() of the last wheel movement
+static uint16_t runFrameAccum = 0;     // |delta| accumulated toward next frame
+static uint8_t runFrame = 0;           // index into RUN_FRAMES
+static bool g_runFacing = false;       // flipH: true = running left
+#define RUN_IDLE_MS 1500               // blank after this long with no turning
+#define RUN_STEP_DETENTS 1             // detents per frame step (higher = slower legs)
 
 // The DISCONNECT button, centred on the round screen.
 #define DBTN_W 240
@@ -469,8 +497,20 @@ static void bleShowDiscoverable() {
 
 static void bleGoDark() {
   bleUi = BLE_UI_OFF;
+  g_running = false;          // cancel any running-man animation
+  runFrameAccum = 0;
   gfx->fillScreen(C_BG);      // clear content so nothing shows if the LED glows
   digitalWrite(LCD_BL, LOW);  // backlight off
+}
+
+// Wake the dark screen into the running-man animation (first frame).
+static void runnerStart() {
+  g_running = true;
+  runFrame = 0;
+  runFrameAccum = 0;
+  gfx->fillScreen(C_BG);  // clean slate under the runner
+  digitalWrite(LCD_BL, HIGH);
+  drawSprite(runFrame, RUN_SCALE, CX, CY, C_BG, g_runFacing);
 }
 
 static void bleShowPrompt() {
@@ -557,11 +597,31 @@ void loop() {
   if (!conn && prevConn) bleShowDiscoverable();
   prevConn = conn;
 
+  // Idle running-man: while the screen is dark and the wheel is turning, wake it
+  // and run the cycle; blank again after a short pause. Runs before the touch
+  // handler so a tap can still override the animation with the DISCONNECT button.
+  if (bleUi == BLE_UI_OFF) {
+    if (delta != 0) {  // BLE_UI_OFF implies g_connected
+      g_runFacing = (delta < 0);  // mirror the runner to the scroll direction
+      if (!g_running) runnerStart();
+      lastRunMotionMs = millis();
+      runFrameAccum += (uint16_t)labs(delta);
+      while (runFrameAccum >= RUN_STEP_DETENTS) {
+        runFrame = (runFrame + 1) % RUN_FRAME_COUNT;
+        runFrameAccum -= RUN_STEP_DETENTS;
+        drawSprite(runFrame, RUN_SCALE, CX, CY, C_BG, g_runFacing);
+      }
+    } else if (g_running && (millis() - lastRunMotionMs >= RUN_IDLE_MS)) {
+      bleGoDark();  // no motion for a while -> back to blank (clears g_running)
+    }
+  }
+
   // Touch: wake to the DISCONNECT button, or act on a tap of it.
   int tx = 0, ty = 0;
   if (pollTap(&tx, &ty)) {
     if (bleUi == BLE_UI_OFF) {
-      bleShowPrompt();  // dark screen tapped -> reveal the button
+      g_running = false;  // runner (if any) yields to the DISCONNECT prompt
+      bleShowPrompt();    // dark screen tapped -> reveal the button
     } else if (bleUi == BLE_UI_PROMPT && inDisconnectBtn(tx, ty)) {
       bleForgetAll();  // onDisconnect() -> bleShowDiscoverable() on the next loop
     }
