@@ -1,12 +1,18 @@
 # rotary-display
 
-Turn a **Waveshare ESP32-S3-Knob-Touch-LCD-1.8** into a USB scroll wheel that
-shows the scroll direction and speed on its round display.
+Turn a **Waveshare ESP32-S3-Knob-Touch-LCD-1.8** into a scroll wheel — over
+**USB** or **Bluetooth** — that uses its round display to show what it's doing.
 
-Turn the knob and the screen shows a green **up** arrow / orange **down** arrow,
-a running detent counter, and a speed bar. At the same time the board acts as a
-USB mouse wheel, so it scrolls whatever window has focus on your computer.
-Press the knob to zero the counter.
+The sketch has two build modes, chosen by the `USE_BLE` toggle at the top of
+[`ScrollKnob/ScrollKnob.ino`](ScrollKnob/ScrollKnob.ino):
+
+- **USB mode (`USE_BLE 0`).** Turn the knob and the screen shows a green **up**
+  arrow / orange **down** arrow, a running detent counter, and a speed bar. The
+  board acts as a USB mouse wheel and scrolls whatever window has focus. Press
+  the knob to zero the counter.
+- **Bluetooth mode (`USE_BLE 1`, the default).** The board is a BLE mouse wheel.
+  See [Bluetooth mode](#bluetooth-mode) below for the pairing and screen
+  behaviour.
 
 > **Status:** working end-to-end on real hardware. Getting there took untangling
 > several board-specific quirks that aren't obvious from the datasheet or the
@@ -21,6 +27,67 @@ It is a single, self-contained sketch — no LVGL, no config headers. It brings
 the ST77916 panel up itself with the Arduino_GFX library and decodes the knob
 with a small interrupt-driven state machine (no extra encoder library needed).
 
+## Bluetooth mode
+
+With `USE_BLE 1` (the default) the board is a **Bluetooth Low Energy mouse
+wheel** built on the ESP32-S3's radio — no dongle, no extra hardware. It uses
+[NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino) for a small-footprint
+HID-over-GATT implementation, and the board's **CST816 touch panel** (idle until
+now) for the on-screen controls.
+
+### Behaviour
+
+| Situation | Screen | What's happening |
+|---|---|---|
+| **Unpaired** | Backlight on, shows **"DISCOVERABLE"** | Advertising as an HID mouse; pair it from your PC's Bluetooth settings (it shows up as **ScrollKnob**). Pairing is "Just Works" — no PIN. |
+| **Connected** | **Off** (panel cleared, backlight off) | The knob scrolls silently. The dark screen is the normal resting state. |
+| **Tap the dark screen** | Shows a **DISCONNECT** button | You have 10 s to act. |
+| **Tap DISCONNECT** | → back to "DISCOVERABLE" | *Forgets every Bluetooth bond* and drops the link, so the host must re-pair. |
+| **No tap for 10 s** | → back to **off** | The prompt times out. |
+
+The scroll direction, `WHEEL_INVERT`, and `PULSES_PER_DETENT` tunables work
+exactly as in USB mode. Scrolling is ignored while unpaired (so it can't jump
+the instant you connect).
+
+> **Notes**
+> - The S3 does **BLE**, not Bluetooth Classic. A BLE HID mouse is supported
+>   natively by Windows, macOS, Linux, Android and iOS/iPadOS.
+> - This board has no battery, so "Bluetooth" means the *data* is wireless — it
+>   still needs USB (or any 5 V source) for power.
+> - The 10 s timeout is `DISCONNECT_PROMPT_MS` at the top of the sketch.
+
+### Extra requirements for BLE mode
+
+- **Library:** install **NimBLE-Arduino** by h2zero, **version 2.x** (Library
+  Manager). The sketch uses the 2.x API (`getInputReport`, `enableScanResponse`,
+  the two-argument connection callbacks); 1.x will not compile.
+- **Board settings:** identical to USB mode (see below). The NimBLE stack fits
+  comfortably in the 3 MB app partition, and `USB Mode: USB-OTG (TinyUSB)` is
+  still fine — it's just not required for HID here.
+- Switch back to USB by setting `USE_BLE 0`; NimBLE is then not needed.
+
+> **Compiling — `'digitalPinToGPIONumber' is not a type` (handled for you):**
+> this is an Arduino_GFX ↔ ESP32-core incompatibility, not a Bluetooth issue (it
+> breaks USB mode too). Board profiles that define `BOARD_HAS_PIN_REMAP` make the
+> core turn `pinMode` / `digitalRead` / `digitalWrite` into macros that clash
+> with Arduino_GFX's I/O-expander headers. The fix must apply to the *whole*
+> build (Arduino_GFX compiles as its own unit, so a sketch `#undef`/`#define`
+> can't fix it). The sketch folder therefore ships a
+> [`build_opt.h`](ScrollKnob/build_opt.h) containing
+> `-DBOARD_USES_HW_GPIO_NUMBERS`; Arduino copies it into every compile command,
+> which disables the remap macros globally — **so it should just compile, on any
+> board.**
+>
+> If your toolchain ignores `build_opt.h`, fall back to either: **select the
+> "ESP32S3 Dev Module" board** (its `esp32s3` variant doesn't enable remapping),
+> or pass the flag yourself — arduino-cli `--build-property
+> "compiler.cpp.extra_flags=-DBOARD_USES_HW_GPIO_NUMBERS"`. (Arduino IDE 2.x may
+> ask you to allow the sketch's build options the first time, and needs a clean
+> rebuild to pick the file up.)
+>
+> Separately, the ESP32 core's own `touchRead(pin)` macro (also remap-gated) is
+> why the touch reader here is called `tpRead()`.
+
 ## Flashing it
 
 This board is unusual to flash. Read [Lesson 1](#1-flashing-the-usb-port-talks-to-two-different-chips)
@@ -32,19 +99,21 @@ before your first upload — the two most confusing failures happen here.
 | Library | Author | Why |
 |---|---|---|
 | **GFX Library for Arduino** | moononournation | drives the ST77916 QSPI panel |
+| **NimBLE-Arduino** (2.x) | h2zero | BLE HID mouse — **only for Bluetooth mode** (`USE_BLE 1`) |
 
 USB HID needs no extra library — it ships with the ESP32 Arduino core (install
 "esp32 by Espressif Systems" via the Boards Manager if you haven't). **No
-encoder library is required** — the knob is decoded in the sketch itself.
+encoder library is required** — the knob is decoded in the sketch itself, and
+the CST816 touch panel is driven inline (no touch library needed either).
 
 ### 2. Board settings (Arduino IDE → Tools)
 
 | Setting | Value |
 |---|---|
-| Board | **ESP32S3 Dev Module** (or the Waveshare profile) |
+| Board | **ESP32S3 Dev Module** — prefer this over a vendor-specific profile; some enable pin remapping, which breaks the Arduino_GFX build (see the compile note above) |
 | PSRAM | **OPI PSRAM** / Enabled |
 | USB CDC On Boot | **Enabled** |
-| USB Mode | **USB-OTG (TinyUSB)** ← required for the HID scroll wheel |
+| USB Mode | **USB-OTG (TinyUSB)** ← required for USB mode; harmless in Bluetooth mode |
 | Flash Size | 16MB (128Mb) |
 | Partition Scheme | any scheme **without** an "ESP SR … MODEL" partition, e.g. **16M Flash (3MB APP/9.9MB FATFS)** |
 
@@ -150,7 +219,7 @@ ST77916 + CST816) and Waveshare's schematic. You should not need to touch these.
 | LCD RST / Backlight | 21 / 47 |
 | Encoder A / B | 8 / 7 |
 | Knob button | 0 |
-| Touch (CST816) SDA/SCL/INT/RST | 11 / 12 / 9 / 10 *(unused by this sketch)* |
+| Touch (CST816) SDA/SCL/INT/RST | 11 / 12 / 9 / 10 *(used for the on-screen controls in Bluetooth mode)* |
 
 ## Tuning
 
@@ -163,8 +232,12 @@ All knobs are `#define`s at the top of the sketch:
 - **One click moves the counter by more than 1?** Set `PULSES_PER_DETENT` to
   match. The excursion decoder emits one count per detent, so this is `1`.
 - **Speed bar fills too easily / too slowly?** Change `VEL_FULL_SCALE`
-  (detents-per-second that fills the bar).
-- **Just want the display test, no USB mouse?** Set `ENABLE_USB_HID` to `0`.
+  (detents-per-second that fills the bar, USB mode).
+- **USB or Bluetooth?** Set `USE_BLE` (`1` = Bluetooth, `0` = USB).
+- **DISCONNECT button times out too fast / slow?** Change `DISCONNECT_PROMPT_MS`
+  (Bluetooth mode, default `10000` = 10 s).
+- **Just want the display test, no USB mouse?** In USB mode set `ENABLE_USB_HID`
+  to `0`.
 - **Debugging?** Set `DIAG` to `1` to add a 4 s boot delay and stream setup
   progress + live encoder-channel readings over Serial. Leave it `0` for normal
   use.
