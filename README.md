@@ -57,11 +57,12 @@ exactly as in USB mode. Scrolling is ignored while unpaired (so it can't jump
 the instant you connect).
 
 > **Notes**
-> - The running-man is a small pixel-art run cycle stored in
->   [`ScrollKnob/sprites.h`](ScrollKnob/sprites.h) (an indexed-palette bitmap,
->   scaled up with `fillRect` blocks). It's generated from
->   [`tools/sprite_author.py`](tools/sprite_author.py) — edit the ASCII frames
->   there and re-run it to change the character. Tune `RUN_IDLE_MS` (blank delay)
+> - The running sprite is stored in [`ScrollKnob/sprites.h`](ScrollKnob/sprites.h)
+>   as an indexed-palette run cycle (scaled up with `fillRect` blocks). It is
+>   generated from the [`walk cycle.png`](walk%20cycle.png) sprite sheet by
+>   [`tools/png_to_sprites.py`](tools/png_to_sprites.py) — replace the PNG and
+>   re-run `python3 tools/png_to_sprites.py emit` to change the character
+>   (`preview` renders a PNG to eyeball first). Tune `RUN_IDLE_MS` (blank delay)
 >   and `RUN_STEP_DETENTS` (leg speed) at the top of the sketch.
 > - The S3 does **BLE**, not Bluetooth Classic. A BLE HID mouse is supported
 >   natively by Windows, macOS, Linux, Android and iOS/iPadOS.
