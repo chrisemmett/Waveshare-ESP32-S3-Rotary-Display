@@ -27,6 +27,12 @@ It is a single, self-contained sketch — no LVGL, no config headers. It brings
 the ST77916 panel up itself with the Arduino_GFX library and decodes the knob
 with a small interrupt-driven state machine (no extra encoder library needed).
 
+**Display orientation.** The panel is rotated via `LCD_ROTATION` near the top of
+the sketch (`0` = normal, `2` = flipped 180° for an upside-down mount; `1`/`3` =
+90°/270°). This drives both the drawing and the touch mapping — `tpRead()`
+mirrors the raw CST816 coordinates to match when `LCD_ROTATION` is `2`, so the
+DISCONNECT button still lines up after a flip.
+
 ## Bluetooth mode
 
 With `USE_BLE 1` (the default) the board is a **Bluetooth Low Energy mouse
@@ -40,7 +46,8 @@ now) for the on-screen controls.
 | Situation | Screen | What's happening |
 |---|---|---|
 | **Unpaired** | Backlight on, shows **"DISCOVERABLE"** | Advertising as an HID mouse; pair it from your PC's Bluetooth settings (it shows up as **ScrollKnob**). Pairing is "Just Works" — no PIN. |
-| **Connected** | **Off** (panel cleared, backlight off) | The knob scrolls silently. The dark screen is the normal resting state. |
+| **Connected, knob still** | **Off** (panel cleared, backlight off) | The dark screen is the normal resting state. |
+| **Connected, turning the knob** | A little **man runs** across the dial | While the screen is otherwise dark, turning the wheel wakes it and animates a run cycle — he runs faster the faster you turn, and faces the direction you scroll. It blanks again ~1.5 s after you stop. |
 | **Tap the dark screen** | Shows a **DISCONNECT** button | You have 10 s to act. |
 | **Tap DISCONNECT** | → back to "DISCOVERABLE" | *Forgets every Bluetooth bond* and drops the link, so the host must re-pair. |
 | **No tap for 10 s** | → back to **off** | The prompt times out. |
@@ -50,6 +57,13 @@ exactly as in USB mode. Scrolling is ignored while unpaired (so it can't jump
 the instant you connect).
 
 > **Notes**
+> - The running sprite is stored in [`ScrollKnob/sprites.h`](ScrollKnob/sprites.h)
+>   as an indexed-palette run cycle (scaled up with `fillRect` blocks). It is
+>   generated from the [`walk cycle.png`](walk%20cycle.png) sprite sheet by
+>   [`tools/png_to_sprites.py`](tools/png_to_sprites.py) — replace the PNG and
+>   re-run `python3 tools/png_to_sprites.py emit` to change the character
+>   (`preview` renders a PNG to eyeball first). Tune `RUN_IDLE_MS` (blank delay)
+>   and `RUN_STEP_DETENTS` (leg speed) at the top of the sketch.
 > - The S3 does **BLE**, not Bluetooth Classic. A BLE HID mouse is supported
 >   natively by Windows, macOS, Linux, Android and iOS/iPadOS.
 > - This board has no battery, so "Bluetooth" means the *data* is wireless — it
