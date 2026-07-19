@@ -273,8 +273,24 @@ static void lvTouchRead(lv_indev_drv_t *drv, lv_indev_data_t *data) {
 static void lvglInit() {
   lv_init();
   size_t px = LCD_W * LV_BUF_LINES;
+  Serial.printf("PSRAM: size=%u free=%u\n", (unsigned)ESP.getPsramSize(),
+                (unsigned)ESP.getFreePsram());
+  // Prefer PSRAM for the LVGL draw buffers; fall back to internal RAM (smaller)
+  // if PSRAM is missing/disabled, so the UI still renders instead of drawing
+  // into a NULL pointer (which shows up as full-screen random-pixel noise).
   lv_buf1 = (lv_color_t *)ps_malloc(px * sizeof(lv_color_t));
   lv_buf2 = (lv_color_t *)ps_malloc(px * sizeof(lv_color_t));
+  if (!lv_buf1 || !lv_buf2) {
+    Serial.println("LVGL: PSRAM buffer alloc FAILED -> internal RAM fallback "
+                   "(check Tools > PSRAM = OPI PSRAM)");
+    if (lv_buf1) free(lv_buf1);
+    if (lv_buf2) free(lv_buf2);
+    px = LCD_W * 16;
+    lv_buf1 = (lv_color_t *)malloc(px * sizeof(lv_color_t));
+    lv_buf2 = (lv_color_t *)malloc(px * sizeof(lv_color_t));
+  }
+  Serial.printf("LVGL buffers: buf1=%p buf2=%p px=%u\n", lv_buf1, lv_buf2,
+                (unsigned)px);
   lv_disp_draw_buf_init(&lv_draw_buf, lv_buf1, lv_buf2, px);
 
   lv_disp_drv_init(&lv_disp_drv);
@@ -302,10 +318,8 @@ static void i2cScan() {
 // ============================ setup / loop ============================
 void setup() {
   Serial.begin(115200);
-#if DIAG
-  delay(3000);
+  delay(600);  // let USB-CDC re-attach so early logs aren't lost
   Serial.println("\n=== ScrollKnob (LVGL) setup ===");
-#endif
 
   // Encoder
   pinMode(ENC_A_PIN, INPUT_PULLUP);
@@ -323,13 +337,23 @@ void setup() {
 
   // Display + I2C peripherals
   gfx->begin();
+
+  // Panel self-test: solid R/G/B flashes BEFORE LVGL. If you see three clean
+  // full-screen colours, the panel + flush path work and any later noise is an
+  // LVGL buffer problem (see Serial). If this is already noise, it's the panel
+  // bring-up itself. (Blue must look blue; if it looks yellow the byte order is
+  // reversed -> flip LV_COLOR_16_SWAP.)
+  Serial.println("panel self-test: R/G/B");
+  gfx->fillScreen(0xF800); delay(400);  // red
+  gfx->fillScreen(0x07E0); delay(400);  // green
+  gfx->fillScreen(0x001F); delay(400);  // blue
+  gfx->fillScreen(0x0000);              // black
+
   touchInit();
   g_hapticsPresent = hapticsInit();
 
-#if DIAG
   i2cScan();
   Serial.printf("DRV2605 %s\n", g_hapticsPresent ? "present" : "MISSING");
-#endif
 
   // BLE (advertises in the background regardless of the active app)
   bleSetup();
@@ -338,9 +362,7 @@ void setup() {
   lvglInit();
   uiInit();
 
-#if DIAG
   Serial.println("=== setup done ===");
-#endif
 }
 
 // Reads button edges into short-press (confirm) / long-press (back) events.
