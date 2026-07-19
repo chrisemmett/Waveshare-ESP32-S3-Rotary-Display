@@ -117,7 +117,12 @@
 #define VEL_FULL_SCALE 25.0f  // detents/sec that fills the speed bar (USB mode feel)
 
 // How long the DISCONNECT button stays up before the screen goes dark again.
+// (Also times out the Scroll app's "MENU" back button.)
 #define DISCONNECT_PROMPT_MS 10000
+
+// Countdown-timer tunables (Timer app).
+#define TM_STEP_MS 30000UL             // duration change per detent (30 s)
+#define TM_MAX_MS (99UL * 60 * 1000)   // clamp at 99:00
 
 // ============================ Colours (RGB565) ============================
 #define RGB565(r, g, b) ((uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)))
@@ -137,10 +142,22 @@ enum Dir { DIR_IDLE,
            DIR_DOWN };
 
 #if USE_BLE
-// BLE-mode display states.
-enum BleUi { BLE_UI_DISCOVERABLE,  // unpaired, advertising, "DISCOVERABLE" on screen
-             BLE_UI_OFF,           // connected, screen + backlight dark
-             BLE_UI_PROMPT };      // connected, showing the DISCONNECT button
+// Multi-function app modes. MODE_MENU is the ring-based home launcher; the
+// others are the individual functions. Add a future function by appending to
+// MENU_ITEMS[] (in the "App modes" section) and giving it a mode + update fn.
+enum AppMode { MODE_MENU,    // ring menu (home)
+               MODE_SCROLL,  // BLE scroll wheel + running-man
+               MODE_TIMER,   // countdown timer
+               MODE_BT };    // Bluetooth status / disconnect
+
+// Scroll-mode sub-state: dark resting screen vs the woken "MENU" back button.
+enum ScrollUi { SCR_DARK, SCR_PROMPT };
+
+// Countdown-timer state.
+enum TimerState { TS_IDLE,   // stopped; turning the dial sets the duration
+                  TS_RUN,    // counting down
+                  TS_PAUSE,  // paused; turning the dial re-sets the duration
+                  TS_DONE }; // reached zero; steady "TIME UP" until dismissed
 #endif
 
 // ============================ Display objects ============================
@@ -362,6 +379,25 @@ static long drawnPos = 0x7FFFFFFF;
 static int drawnBar = -1;
 #endif
 
+#if USE_BLE
+// ---- Multi-function app state ----
+static AppMode g_mode = MODE_MENU;   // active app; boot lands on the menu
+static int g_menuSel = 0;            // highlighted ring-menu item index
+static ScrollUi g_scrUi = SCR_DARK;  // scroll-mode sub-state
+
+// Countdown timer.
+static TimerState g_tmState = TS_IDLE;
+static uint32_t g_tmDurMs = 5UL * 60 * 1000;  // last set duration (default 5:00)
+static uint32_t g_tmRemMs = 5UL * 60 * 1000;  // remaining (idle/paused)
+static uint32_t g_tmEndMs = 0;                // millis() deadline while running
+static int g_tmShownSec = -1;                 // last MM:SS second painted
+static int g_tmShownSeg = -1;                 // last progress-ring segment painted
+static int g_tmShownState = -1;               // last TimerState painted
+
+// Bluetooth screen: last painted connection state (-1 forces the first paint).
+static int8_t g_btShownConn = -1;
+#endif
+
 // ============================ Small text helper ============================
 static void drawCentered(const char *s, int cx, int topY, uint8_t size,
                          uint16_t fg, uint16_t bg) {
@@ -447,15 +483,13 @@ static void render(Dir dir, long pos, float speed) {
 #if USE_BLE
 #include "sprites.h"  // running-man run cycle (RUN_FRAMES, drawSprite)
 
-static BleUi bleUi = BLE_UI_DISCOVERABLE;
-static uint32_t promptSinceMs = 0;
+static uint32_t promptSinceMs = 0;  // when the Scroll "MENU" prompt appeared
 
 // ---- Idle running-man animation ----
-// Shown while the screen is dark (BLE_UI_OFF, i.e. connected) AND the knob is
-// being turned. Frames advance with the wheel (faster turning = faster running)
-// and the runner mirrors to the scroll direction. After RUN_IDLE_MS of no
-// motion the screen blanks again. bleUi stays BLE_UI_OFF the whole time so the
-// existing tap-to-DISCONNECT path keeps working.
+// Shown while the Scroll screen is dark (SCR_DARK) AND the knob is being turned.
+// Frames advance with the wheel (faster turning = faster running) and the runner
+// mirrors to the scroll direction. After RUN_IDLE_MS of no motion it blanks
+// again. Used only by the Scroll app.
 static bool g_running = false;         // runner currently on screen
 static uint32_t lastRunMotionMs = 0;   // millis() of the last wheel movement
 static uint16_t runFrameAccum = 0;     // |delta| accumulated toward next frame
@@ -464,7 +498,8 @@ static bool g_runFacing = false;       // flipH: true = running left
 #define RUN_IDLE_MS 1500               // blank after this long with no turning
 #define RUN_STEP_DETENTS 1             // detents per frame step (higher = slower legs)
 
-// The DISCONNECT button, centred on the round screen.
+// Centred button box, reused for the Scroll "MENU" prompt and the Bluetooth
+// DISCONNECT button. inDisconnectBtn is the shared hit test.
 #define DBTN_W 240
 #define DBTN_H 90
 static const int DBTN_X = (LCD_W - DBTN_W) / 2;  // 60
@@ -474,36 +509,15 @@ static bool inDisconnectBtn(int x, int y) {
   return x >= DBTN_X && x < DBTN_X + DBTN_W && y >= DBTN_Y && y < DBTN_Y + DBTN_H;
 }
 
-static void drawDiscoverable() {
+// A full-screen centred button (Scroll's "MENU" back button).
+static void drawButton(const char *label, uint16_t fill) {
   gfx->fillScreen(C_BG);
-  drawCentered("BLUETOOTH", CX, 110, 2, C_TITLE, C_BG);
-  drawCentered("DISCOVERABLE", CX, 150, 3, C_UP, C_BG);
-  drawCentered("pair from your PC", CX, 210, 1, C_TITLE, C_BG);
-}
-
-static void drawDisconnectPrompt() {
-  gfx->fillScreen(C_BG);
-  gfx->fillRoundRect(DBTN_X, DBTN_Y, DBTN_W, DBTN_H, 16, C_DOWN);
+  gfx->fillRoundRect(DBTN_X, DBTN_Y, DBTN_W, DBTN_H, 16, fill);
   // vertically centre size-3 text (8*3 = 24px tall) inside the button
-  drawCentered("DISCONNECT", CX, DBTN_Y + (DBTN_H - 24) / 2, 3, C_WHITE, C_DOWN);
+  drawCentered(label, CX, DBTN_Y + (DBTN_H - 24) / 2, 3, C_WHITE, fill);
 }
 
-// State transitions. Each one both updates bleUi and drives the panel/backlight.
-static void bleShowDiscoverable() {
-  bleUi = BLE_UI_DISCOVERABLE;
-  drawDiscoverable();
-  digitalWrite(LCD_BL, HIGH);
-}
-
-static void bleGoDark() {
-  bleUi = BLE_UI_OFF;
-  g_running = false;          // cancel any running-man animation
-  runFrameAccum = 0;
-  gfx->fillScreen(C_BG);      // clear content so nothing shows if the LED glows
-  digitalWrite(LCD_BL, LOW);  // backlight off
-}
-
-// Wake the dark screen into the running-man animation (first frame).
+// Wake the dark Scroll screen into the running-man animation (first frame).
 static void runnerStart() {
   g_running = true;
   runFrame = 0;
@@ -512,12 +526,336 @@ static void runnerStart() {
   digitalWrite(LCD_BL, HIGH);
   drawSprite(runFrame, RUN_SCALE, CX, CY, C_BG, g_runFacing);
 }
+#endif  // USE_BLE
 
-static void bleShowPrompt() {
-  bleUi = BLE_UI_PROMPT;
+// ============================ App modes ============================
+// The multi-function state machine: a ring MENU launches SCROLL / TIMER / BT,
+// each of which returns home via an on-screen back affordance. loop() reads the
+// encoder delta once and dispatches to the active mode's update function.
+#if USE_BLE
+static void enterMode(AppMode m);  // forward decl (called by the update fns)
+
+// ---- Menu model (array-driven; append here to add a function) ----
+struct MenuItem { const char *label; AppMode mode; };
+static const MenuItem MENU_ITEMS[] = {
+  { "SCROLL", MODE_SCROLL },
+  { "TIMER", MODE_TIMER },
+  { "BLUETOOTH", MODE_BT },
+};
+static const int MENU_N = sizeof(MENU_ITEMS) / sizeof(MENU_ITEMS[0]);
+
+static int menuWrap(int i) {
+  i %= MENU_N;
+  if (i < 0) i += MENU_N;
+  return i;
+}
+
+// ---- Shared on-screen back affordance (top-centre chevron) ----
+#define BACK_HW 40
+static bool inBackZone(int x, int y) {
+  return y <= 74 && x >= CX - BACK_HW && x <= CX + BACK_HW;
+}
+
+static void drawBackArrow() {
+  const int ty = 16;  // chevron near 12 o'clock, pointing left
+  gfx->fillTriangle(CX - 16, ty + 16, CX + 6, ty, CX + 6, ty + 32, C_TITLE);
+  gfx->fillRect(CX + 6, ty + 11, 16, 10, C_TITLE);
+}
+
+// ---- Ring menu (home) ----
+// Items sit on a circle; the selected one is pulled to 12 o'clock under a fixed
+// pointer and drawn large/bright, the rest dimmer around the ring. One detent
+// rotates the selection; a tap enters the highlighted app.
+static void drawMenu() {
+  gfx->fillScreen(C_BG);
+  gfx->fillTriangle(CX - 12, 30, CX + 12, 30, CX, 48, C_UP);  // fixed pointer
+
+  const int R = 112;
+  for (int i = 0; i < MENU_N; i++) {
+    int k = menuWrap(i - g_menuSel);  // slot 0 = selected (top)
+    float a = (-90.0f + k * (360.0f / MENU_N)) * DEG_TO_RAD;
+    int ix = CX + (int)(R * cosf(a));
+    int iy = CY + (int)(R * sinf(a));
+    if (k == 0) {  // selected: large + bright, with an underline accent
+      drawCentered(MENU_ITEMS[i].label, ix, iy - 12, 3, C_WHITE, C_BG);
+      int w = (int)strlen(MENU_ITEMS[i].label) * 6 * 3;
+      gfx->fillRect(ix - w / 2, iy + 18, w, 4, C_UP);
+    } else {  // others: small + dim
+      drawCentered(MENU_ITEMS[i].label, ix, iy - 8, 2, C_IDLE, C_BG);
+    }
+  }
+  drawCentered("turn . tap", CX, LCD_H - 40, 1, C_TITLE, C_BG);
+}
+
+static void updateMenu(long delta) {
+  if (delta != 0) {  // full repaint only on discrete detents
+    g_menuSel = menuWrap(g_menuSel + (int)delta);
+    drawMenu();
+  }
+  int tx = 0, ty = 0;
+  if (pollTap(&tx, &ty)) enterMode(MENU_ITEMS[g_menuSel].mode);
+}
+
+// ---- Scroll app (BLE wheel + running man) ----
+static void scrollGoDark() {
+  g_scrUi = SCR_DARK;
+  g_running = false;
+  runFrameAccum = 0;
+  gfx->fillScreen(C_BG);
+  digitalWrite(LCD_BL, LOW);
+}
+
+static void scrollShowPrompt() {
+  g_scrUi = SCR_PROMPT;
   promptSinceMs = millis();
-  drawDisconnectPrompt();
+  drawButton("MENU", C_UP);
   digitalWrite(LCD_BL, HIGH);
+}
+
+static void updateScroll(long delta) {
+  // Rotation -> BLE wheel (only while connected; Scroll is the only mode that
+  // emits wheel events).
+  if (delta != 0) {
+    if (g_connected) {
+      scrollAccum += delta;
+      while (labs(scrollAccum) >= PULSES_PER_DETENT) {
+        int step = (scrollAccum > 0) ? 1 : -1;
+        int8_t whl = WHEEL_INVERT ? -step : step;  // +ve wheel scrolls up
+        bleSendWheel(whl);
+        scrollAccum -= step * PULSES_PER_DETENT;
+      }
+    } else {
+      scrollAccum = 0;
+    }
+  }
+
+  // Running-man while the screen is the dark resting state.
+  if (g_scrUi == SCR_DARK) {
+    if (delta != 0) {
+      g_runFacing = (delta < 0);  // mirror the runner to the scroll direction
+      if (!g_running) runnerStart();
+      lastRunMotionMs = millis();
+      runFrameAccum += (uint16_t)labs(delta);
+      while (runFrameAccum >= RUN_STEP_DETENTS) {
+        runFrame = (runFrame + 1) % RUN_FRAME_COUNT;
+        runFrameAccum -= RUN_STEP_DETENTS;
+        drawSprite(runFrame, RUN_SCALE, CX, CY, C_BG, g_runFacing);
+      }
+    } else if (g_running && (millis() - lastRunMotionMs >= RUN_IDLE_MS)) {
+      scrollGoDark();  // no motion for a while -> back to blank
+    }
+  }
+
+  // Touch: dark screen -> wake the "MENU" button; button tap -> home.
+  int tx = 0, ty = 0;
+  if (pollTap(&tx, &ty)) {
+    if (g_scrUi == SCR_DARK) {
+      g_running = false;   // runner yields to the prompt
+      scrollShowPrompt();
+    } else if (g_scrUi == SCR_PROMPT && inDisconnectBtn(tx, ty)) {
+      enterMode(MODE_MENU);
+    }
+  }
+
+  // The "MENU" prompt times out back to dark.
+  if (g_scrUi == SCR_PROMPT && (millis() - promptSinceMs >= DISCONNECT_PROMPT_MS)) {
+    scrollGoDark();
+  }
+}
+
+// ---- Countdown timer ----
+static void fmtMMSS(uint32_t ms, char *buf) {
+  uint32_t s = ms / 1000;
+  if (s > 99 * 60 + 59) s = 99 * 60 + 59;
+  snprintf(buf, 6, "%02u:%02u", (unsigned)(s / 60), (unsigned)(s % 60));
+}
+
+#define TM_SEG 60  // progress-ring tick count
+static void drawProgressRing(int filled) {
+  const int Ro = 168, Ri = 150;
+  for (int t = 0; t < TM_SEG; t++) {
+    float a = (-90.0f + t * (360.0f / TM_SEG)) * DEG_TO_RAD;
+    float c = cosf(a), s = sinf(a);
+    uint16_t col = (t < filled) ? C_UP : C_TRACK;
+    int xi = CX + (int)(Ri * c), yi = CY + (int)(Ri * s);
+    int xo = CX + (int)(Ro * c), yo = CY + (int)(Ro * s);
+    gfx->drawLine(xi, yi, xo, yo, col);
+    gfx->drawLine(xi + 1, yi, xo + 1, yo, col);  // thicken slightly
+  }
+}
+
+static uint32_t tmRemaining() {
+  if (g_tmState == TS_RUN) {
+    long r = (long)(g_tmEndMs - millis());
+    return r > 0 ? (uint32_t)r : 0;
+  }
+  return g_tmRemMs;
+}
+
+// Draw the timer face. full=true repaints everything (back arrow, ring track);
+// otherwise only the MM:SS number, ring, and status word update, and only when
+// their displayed value changes (anti-flicker, mirrors render()).
+static void drawTimerFace(bool full) {
+  if (full) {
+    gfx->fillScreen(C_BG);
+    drawBackArrow();
+    g_tmShownSec = -1;
+    g_tmShownSeg = -1;
+    g_tmShownState = -1;
+  }
+  uint32_t rem = tmRemaining();
+
+  int filled = (g_tmDurMs > 0) ? (int)((uint64_t)rem * TM_SEG / g_tmDurMs) : 0;
+  if (filled != g_tmShownSeg) {
+    drawProgressRing(filled);
+    g_tmShownSeg = filled;
+  }
+
+  bool stateChanged = ((int)g_tmState != g_tmShownState);
+  int sec = (int)(rem / 1000);
+  if (sec != g_tmShownSec || stateChanged) {
+    char buf[6];
+    fmtMMSS(rem, buf);
+    uint16_t col = (g_tmState == TS_RUN) ? C_UP
+                 : (g_tmState == TS_PAUSE) ? C_IDLE : C_TITLE;
+    gfx->fillRect(0, CY - 30, LCD_W, 60, C_BG);
+    drawCentered(buf, CX, CY - 24, 6, col, C_BG);
+    g_tmShownSec = sec;
+  }
+
+  if (stateChanged) {
+    const char *word = (g_tmState == TS_RUN) ? "RUNNING"
+                     : (g_tmState == TS_PAUSE) ? "PAUSED" : "SET";
+    gfx->fillRect(0, CY + 40, LCD_W, 24, C_BG);
+    drawCentered(word, CX, CY + 44, 2, C_TITLE, C_BG);
+    g_tmShownState = (int)g_tmState;
+  }
+}
+
+static void drawTimerAlert() {
+  gfx->fillScreen(C_BG);
+  drawCentered("TIME", CX, CY - 56, 5, C_DOWN, C_BG);
+  drawCentered("UP", CX, CY + 4, 5, C_DOWN, C_BG);
+  drawCentered("tap to dismiss", CX, CY + 74, 1, C_TITLE, C_BG);
+}
+
+static void updateTimer(long delta) {
+  int tx = 0, ty = 0;
+  bool tapped = pollTap(&tx, &ty);
+
+  // Back zone wins, except on the alert screen where any tap dismisses.
+  if (tapped && g_tmState != TS_DONE && inBackZone(tx, ty)) {
+    enterMode(MODE_MENU);
+    return;
+  }
+
+  switch (g_tmState) {
+    case TS_IDLE:
+    case TS_PAUSE:
+      if (delta != 0) {  // turning sets the duration
+        long nd = (long)g_tmRemMs + delta * (long)TM_STEP_MS;
+        if (nd < 0) nd = 0;
+        if (nd > (long)TM_MAX_MS) nd = TM_MAX_MS;
+        g_tmRemMs = (uint32_t)nd;
+        g_tmDurMs = g_tmRemMs;  // a freshly set duration (ring denominator)
+        drawTimerFace(false);
+      }
+      if (tapped && g_tmRemMs > 0) {  // start / resume
+        g_tmEndMs = millis() + g_tmRemMs;
+        g_tmState = TS_RUN;
+        drawTimerFace(false);
+      }
+      break;
+
+    case TS_RUN:
+      if (tapped) {  // pause
+        g_tmRemMs = tmRemaining();
+        g_tmState = TS_PAUSE;
+        drawTimerFace(false);
+        break;
+      }
+      if (tmRemaining() == 0) {  // finished
+        g_tmRemMs = 0;
+        g_tmState = TS_DONE;
+        drawTimerAlert();
+        break;
+      }
+      drawTimerFace(false);  // per-second redraw is internally gated
+      break;
+
+    case TS_DONE:
+      if (tapped) {  // dismiss -> idle at the last set duration
+        g_tmState = TS_IDLE;
+        g_tmRemMs = g_tmDurMs;
+        drawTimerFace(true);
+      }
+      break;
+  }
+}
+
+// ---- Bluetooth status / disconnect ----
+// The DISCONNECT button (shown only while connected) sits below the status text.
+static const int BTN_DY = 40;  // its downward offset from the shared button box
+
+static void drawBtScreen() {
+  gfx->fillScreen(C_BG);
+  drawBackArrow();
+  drawCentered("BLUETOOTH", CX, 66, 2, C_TITLE, C_BG);
+  if (g_connected) {
+    drawCentered("CONNECTED", CX, 106, 3, C_UP, C_BG);
+    gfx->fillRoundRect(DBTN_X, DBTN_Y + BTN_DY, DBTN_W, DBTN_H, 16, C_DOWN);
+    drawCentered("DISCONNECT", CX, DBTN_Y + BTN_DY + (DBTN_H - 24) / 2, 3,
+                 C_WHITE, C_DOWN);
+  } else {
+    drawCentered("DISCOVERABLE", CX, 106, 3, C_DOWN, C_BG);
+    drawCentered("pair from your PC", CX, 168, 1, C_TITLE, C_BG);
+  }
+  g_btShownConn = g_connected ? 1 : 0;
+}
+
+static void updateBt(long delta) {
+  (void)delta;
+  if ((g_connected ? 1 : 0) != g_btShownConn) drawBtScreen();  // status flip
+
+  int tx = 0, ty = 0;
+  if (pollTap(&tx, &ty)) {
+    if (inBackZone(tx, ty)) {
+      enterMode(MODE_MENU);
+    } else if (g_connected && tx >= DBTN_X && tx < DBTN_X + DBTN_W
+               && ty >= DBTN_Y + BTN_DY && ty < DBTN_Y + BTN_DY + DBTN_H) {
+      bleForgetAll();  // forget bonds + drop the link
+    }
+  }
+}
+
+// ---- Mode entry: reset per-mode state, set the backlight, paint. ----
+static void enterMode(AppMode m) {
+  g_mode = m;
+  switch (m) {
+    case MODE_MENU:
+      digitalWrite(LCD_BL, HIGH);
+      drawMenu();
+      break;
+    case MODE_SCROLL:
+      g_scrUi = SCR_DARK;
+      g_running = false;
+      runFrameAccum = 0;
+      scrollAccum = 0;  // don't inherit stray counts from navigating
+      gfx->fillScreen(C_BG);
+      digitalWrite(LCD_BL, LOW);  // dark resting state
+      break;
+    case MODE_TIMER:
+      g_tmState = TS_IDLE;
+      g_tmRemMs = g_tmDurMs;
+      digitalWrite(LCD_BL, HIGH);
+      drawTimerFace(true);
+      break;
+    case MODE_BT:
+      g_btShownConn = -1;  // force first paint
+      digitalWrite(LCD_BL, HIGH);
+      drawBtScreen();
+      break;
+  }
 }
 #endif  // USE_BLE
 
@@ -549,8 +887,8 @@ void setup() {
 
 #if USE_BLE
   touchInit();
-  bleSetup();
-  bleShowDiscoverable();  // advertising -> screen shows "DISCOVERABLE"
+  bleSetup();            // BLE stays advertising in the background in every mode
+  enterMode(MODE_MENU);  // boot lands on the ring menu (home)
 #else
 #if ENABLE_USB_HID
   Mouse.begin();
@@ -573,63 +911,15 @@ void loop() {
   lastRaw = raw;
 
 #if USE_BLE
-  // ---- Bluetooth mode ----
-  // Scroll only counts once a host is connected; drop motion while unpaired so
-  // it doesn't jump the moment we connect.
-  if (delta != 0) {
-    if (g_connected) {
-      scrollAccum += delta;
-      while (labs(scrollAccum) >= PULSES_PER_DETENT) {
-        int step = (scrollAccum > 0) ? 1 : -1;
-        int8_t whl = WHEEL_INVERT ? -step : step;  // +ve wheel scrolls up
-        bleSendWheel(whl);
-        scrollAccum -= step * PULSES_PER_DETENT;
-      }
-    } else {
-      scrollAccum = 0;
-    }
-  }
-
-  // Connection edges: connect -> screen off; disconnect -> discoverable.
-  static bool prevConn = false;
-  bool conn = g_connected;
-  if (conn && !prevConn) bleGoDark();
-  if (!conn && prevConn) bleShowDiscoverable();
-  prevConn = conn;
-
-  // Idle running-man: while the screen is dark and the wheel is turning, wake it
-  // and run the cycle; blank again after a short pause. Runs before the touch
-  // handler so a tap can still override the animation with the DISCONNECT button.
-  if (bleUi == BLE_UI_OFF) {
-    if (delta != 0) {  // BLE_UI_OFF implies g_connected
-      g_runFacing = (delta < 0);  // mirror the runner to the scroll direction
-      if (!g_running) runnerStart();
-      lastRunMotionMs = millis();
-      runFrameAccum += (uint16_t)labs(delta);
-      while (runFrameAccum >= RUN_STEP_DETENTS) {
-        runFrame = (runFrame + 1) % RUN_FRAME_COUNT;
-        runFrameAccum -= RUN_STEP_DETENTS;
-        drawSprite(runFrame, RUN_SCALE, CX, CY, C_BG, g_runFacing);
-      }
-    } else if (g_running && (millis() - lastRunMotionMs >= RUN_IDLE_MS)) {
-      bleGoDark();  // no motion for a while -> back to blank (clears g_running)
-    }
-  }
-
-  // Touch: wake to the DISCONNECT button, or act on a tap of it.
-  int tx = 0, ty = 0;
-  if (pollTap(&tx, &ty)) {
-    if (bleUi == BLE_UI_OFF) {
-      g_running = false;  // runner (if any) yields to the DISCONNECT prompt
-      bleShowPrompt();    // dark screen tapped -> reveal the button
-    } else if (bleUi == BLE_UI_PROMPT && inDisconnectBtn(tx, ty)) {
-      bleForgetAll();  // onDisconnect() -> bleShowDiscoverable() on the next loop
-    }
-  }
-
-  // If the button sat untouched for the timeout, go dark again.
-  if (bleUi == BLE_UI_PROMPT && (millis() - promptSinceMs >= DISCONNECT_PROMPT_MS)) {
-    bleGoDark();
+  // ---- Multi-function dispatch ----
+  // BLE stays advertising/connected in the background regardless of the active
+  // app; only the Scroll app emits wheel events. Each app owns its own touch,
+  // rendering, and back-to-menu handling.
+  switch (g_mode) {
+    case MODE_MENU:   updateMenu(delta);   break;
+    case MODE_SCROLL: updateScroll(delta); break;
+    case MODE_TIMER:  updateTimer(delta);  break;
+    case MODE_BT:     updateBt(delta);     break;
   }
 
   delay(2);

@@ -1,7 +1,8 @@
 # rotary-display
 
-Turn a **Waveshare ESP32-S3-Knob-Touch-LCD-1.8** into a scroll wheel — over
-**USB** or **Bluetooth** — that uses its round display to show what it's doing.
+Turn a **Waveshare ESP32-S3-Knob-Touch-LCD-1.8** into a **multi-function
+knob** — over **USB** or **Bluetooth** — that uses its round display to show
+what it's doing.
 
 The sketch has two build modes, chosen by the `USE_BLE` toggle at the top of
 [`ScrollKnob/ScrollKnob.ino`](ScrollKnob/ScrollKnob.ino):
@@ -9,10 +10,11 @@ The sketch has two build modes, chosen by the `USE_BLE` toggle at the top of
 - **USB mode (`USE_BLE 0`).** Turn the knob and the screen shows a green **up**
   arrow / orange **down** arrow, a running detent counter, and a speed bar. The
   board acts as a USB mouse wheel and scrolls whatever window has focus. Press
-  the knob to zero the counter.
-- **Bluetooth mode (`USE_BLE 1`, the default).** The board is a BLE mouse wheel.
-  See [Bluetooth mode](#bluetooth-mode) below for the pairing and screen
-  behaviour.
+  the knob to zero the counter. (Single-function; unchanged.)
+- **Bluetooth mode (`USE_BLE 1`, the default).** The board boots into a
+  **ring-based menu** and hosts several functions — a **BLE scroll wheel**, a
+  **countdown timer**, and a **Bluetooth** status/disconnect screen — each
+  launched from the menu. See [Bluetooth mode](#bluetooth-mode) below.
 
 > **Status:** working end-to-end on real hardware. Getting there took untangling
 > several board-specific quirks that aren't obvious from the datasheet or the
@@ -31,30 +33,65 @@ with a small interrupt-driven state machine (no extra encoder library needed).
 the sketch (`0` = normal, `2` = flipped 180° for an upside-down mount; `1`/`3` =
 90°/270°). This drives both the drawing and the touch mapping — `tpRead()`
 mirrors the raw CST816 coordinates to match when `LCD_ROTATION` is `2`, so the
-DISCONNECT button still lines up after a flip.
+on-screen buttons still line up after a flip.
 
 ## Bluetooth mode
 
-With `USE_BLE 1` (the default) the board is a **Bluetooth Low Energy mouse
-wheel** built on the ESP32-S3's radio — no dongle, no extra hardware. It uses
+With `USE_BLE 1` (the default) the board is a **multi-function device** built on
+the ESP32-S3's radio — no dongle, no extra hardware. It uses
 [NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino) for a small-footprint
-HID-over-GATT implementation, and the board's **CST816 touch panel** (idle until
-now) for the on-screen controls.
+HID-over-GATT implementation (the scroll wheel), and the board's **CST816 touch
+panel** for the on-screen controls. BLE stays advertising/connected in the
+background no matter which function is open — only the **Scroll** app actually
+sends wheel events, so setting a timer never scrolls your host.
 
-### Behaviour
+### The ring menu (home)
 
-| Situation | Screen | What's happening |
-|---|---|---|
-| **Unpaired** | Backlight on, shows **"DISCOVERABLE"** | Advertising as an HID mouse; pair it from your PC's Bluetooth settings (it shows up as **ScrollKnob**). Pairing is "Just Works" — no PIN. |
-| **Connected, knob still** | **Off** (panel cleared, backlight off) | The dark screen is the normal resting state. |
-| **Connected, turning the knob** | A little **man runs** across the dial | While the screen is otherwise dark, turning the wheel wakes it and animates a run cycle — he runs faster the faster you turn, and faces the direction you scroll. It blanks again ~1.5 s after you stop. |
-| **Tap the dark screen** | Shows a **DISCONNECT** button | You have 10 s to act. |
-| **Tap DISCONNECT** | → back to "DISCOVERABLE" | *Forgets every Bluetooth bond* and drops the link, so the host must re-pair. |
-| **No tap for 10 s** | → back to **off** | The prompt times out. |
+The board **boots into a ring menu**. The available functions are arranged
+around the round dial; the **selected one sits at 12 o'clock** under a fixed
+pointer, drawn large and bright, with the rest dimmer around the ring.
 
-The scroll direction, `WHEEL_INVERT`, and `PULSES_PER_DETENT` tunables work
-exactly as in USB mode. Scrolling is ignored while unpaired (so it can't jump
-the instant you connect).
+- **Turn the knob** to rotate the selection around the ring.
+- **Tap the screen** to open the highlighted function.
+
+Every function screen has a small **back arrow at the top-centre** — tap it to
+return to the menu. (The physical knob button is *not* used for navigation in
+Bluetooth mode.)
+
+The menu is **array-driven**: to add a future function, append an entry to
+`MENU_ITEMS[]` in the sketch and give it an `AppMode` plus an `updateX()` /
+`enterMode()` case.
+
+### Scroll
+
+The original BLE mouse-wheel. The screen rests **dark**; turning the knob wakes
+it and a little **man runs** across the dial — faster the faster you turn,
+facing the scroll direction — then it blanks again ~1.5 s after you stop.
+Scrolling is sent only while a host is connected (so it can't jump the instant
+you connect). **Tap the dark screen** to reveal a **MENU** button; tap that to
+go home (or it times out after 10 s and re-darkens). The scroll direction,
+`WHEEL_INVERT`, and `PULSES_PER_DETENT` tunables work exactly as in USB mode.
+
+### Timer
+
+A countdown timer.
+
+- **Turn** the knob to set the duration — **30 s per detent**, default **5:00**,
+  clamped to **99:00**.
+- **Tap** the centre to **start**; tap again to **pause**, tap to **resume**.
+- The remaining time shows as **MM:SS** with a **ring around the rim** that
+  depletes as it counts down.
+- At zero it shows a steady **"TIME UP"** screen (there's no buzzer on this
+  board, so the alert is visual) — **tap to dismiss** back to the set screen.
+- The **back arrow** returns to the menu.
+
+### Bluetooth
+
+A status screen: **CONNECTED** (green) or **DISCOVERABLE** (orange), showing up
+to your PC as **ScrollKnob** (pairing is "Just Works" — no PIN). While
+connected it offers a **DISCONNECT** button that *forgets every Bluetooth bond*
+and drops the link, so the host must re-pair. The **back arrow** returns to the
+menu.
 
 > **Notes**
 > - The running sprite is stored in [`ScrollKnob/sprites.h`](ScrollKnob/sprites.h)
@@ -68,7 +105,11 @@ the instant you connect).
 >   natively by Windows, macOS, Linux, Android and iOS/iPadOS.
 > - This board has no battery, so "Bluetooth" means the *data* is wireless — it
 >   still needs USB (or any 5 V source) for power.
-> - The 10 s timeout is `DISCONNECT_PROMPT_MS` at the top of the sketch.
+> - The 10 s timeout is `DISCONNECT_PROMPT_MS` at the top of the sketch — it now
+>   also times out the Scroll app's woken **MENU** button.
+> - The timer's step (`TM_STEP_MS`) and cap (`TM_MAX_MS`) are `#define`s near the
+>   top of the sketch. The progress rim is drawn with plain `drawLine` ticks (not
+>   `fillArc`) so it compiles on any Arduino_GFX version.
 
 ### Extra requirements for BLE mode
 
@@ -248,8 +289,11 @@ All knobs are `#define`s at the top of the sketch:
 - **Speed bar fills too easily / too slowly?** Change `VEL_FULL_SCALE`
   (detents-per-second that fills the bar, USB mode).
 - **USB or Bluetooth?** Set `USE_BLE` (`1` = Bluetooth, `0` = USB).
-- **DISCONNECT button times out too fast / slow?** Change `DISCONNECT_PROMPT_MS`
-  (Bluetooth mode, default `10000` = 10 s).
+- **DISCONNECT / MENU button times out too fast / slow?** Change
+  `DISCONNECT_PROMPT_MS` (Bluetooth mode, default `10000` = 10 s). It bounds both
+  the Bluetooth DISCONNECT prompt and the Scroll app's woken MENU button.
+- **Timer steps too coarse / cap too low?** Change `TM_STEP_MS` (duration change
+  per detent, default `30000` = 30 s) and `TM_MAX_MS` (clamp, default `99:00`).
 - **Just want the display test, no USB mouse?** In USB mode set `ENABLE_USB_HID`
   to `0`.
 - **Debugging?** Set `DIAG` to `1` to add a 4 s boot delay and stream setup
@@ -261,8 +305,14 @@ All knobs are `#define`s at the top of the sketch:
 - The knob is decoded on a **pin-change interrupt**, so counts are never dropped
   even while the screen is redrawing — no background task or shared-state
   juggling needed.
-- The display only repaints the parts that change (arrow on direction change,
-  number and bar on each 80 ms tick), so there's no full-screen flicker.
+- Bluetooth mode is a small **app-mode state machine** (`g_mode`): `loop()` reads
+  the encoder delta once and dispatches to the active app's `update*()` function,
+  which owns its own touch and rendering. `MENU_ITEMS[]` makes the launcher
+  array-driven, so adding a function is a localized change.
+- The display only repaints what changes: the **menu** repaints only on a detent
+  turn, the **timer** clears just the MM:SS box and redraws only when the shown
+  second (or ring segment) changes, and the USB arrow/number/bar repaint on
+  change — so there's no full-screen flicker.
 - HID output and the on-screen numbers are driven from the **same** encoder
   reading each loop, so the scroll and the display can't drift apart.
 
