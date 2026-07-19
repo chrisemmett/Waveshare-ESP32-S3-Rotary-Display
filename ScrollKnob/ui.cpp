@@ -114,6 +114,7 @@ lv_obj_t *make_marker(lv_obj_t *parent) {
 // MENU back affordance: a small down chevron + "MENU" label, tappable.
 static void back_click_cb(lv_event_t *e) {
   (void)e;
+  appHapticPress();
   navGo(SCR_LAUNCHER);
 }
 

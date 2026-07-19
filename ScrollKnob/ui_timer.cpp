@@ -65,6 +65,7 @@ static void redraw(void) {
 
 static void center_click_cb(lv_event_t *e) {
   (void)e;
+  appHapticPress();
   timer_press();
 }
 

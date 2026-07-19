@@ -38,7 +38,7 @@ static void scrollInner(void) {
   lv_obj_set_y(s_inner, (lv_coord_t)(-(2 * LINE_GAP) - m));
 }
 
-static void pill_click_cb(lv_event_t *e) { (void)e; scroll_press(); }
+static void pill_click_cb(lv_event_t *e) { (void)e; appHapticPress(); scroll_press(); }
 
 static void build(void) {
   s_scr = make_screen_base();

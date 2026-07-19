@@ -25,14 +25,14 @@ machine.
 
 ## Interaction model
 
-The knob **press** is the primary confirm; **touch** works in parallel.
+This knob has **no shaft press** — the UI is driven by **rotate + touch**.
+(GPIO0 is only the BOOT button, used for flashing, not a UI control.)
 
 | Input | Effect |
 |---|---|
 | **Rotate** | Move focus / adjust the active value. One detent fires a short haptic. |
-| **Press** | Open the focused app / start-pause / toggle — context per screen. Fires a stronger haptic. |
-| **Long-press** (~0.6 s) | Back to the launcher from any app. |
-| **Touch** | Tap a ring item, the centre control, a settings row, or the **MENU** chevron (bottom-centre) to go back. |
+| **Tap** | Activate — open the focused app (tap the centre or its icon), start/pause the timer (tap the centre), toggle the scroll mode pill, or activate a settings row. Fires a confirm haptic. |
+| **Tap MENU** | The chevron at bottom-centre returns to the launcher from any app. |
 
 ## The apps
 
@@ -40,22 +40,22 @@ The knob **press** is the primary confirm; **touch** works in parallel.
 App icons sit on a ring; the **focused one animates to 12 o'clock** under a fixed
 pointer, enlarged and glowing, the others dimmed around the ring. The centre
 shows the focused app's icon, name, description, and a `"{i} / {n} · PRESS TO
-OPEN"` meta line. Rotate to change focus; press (or tap the focused item) to open.
+OPEN"` meta line. Rotate to change focus; tap the centre (or the focused item) to open.
 
 ### Scroll Wheel
 Rotating emits BLE HID wheel events to a paired host. A viewport scrolls with the
 knob and the active-direction chevron highlights (fading ~480 ms after the last
-tick). **Press toggles LINE / PAGE** mode (PAGE sends a larger delta); a running
+tick). **Tapping the mode pill toggles LINE / PAGE** (PAGE sends a larger delta); a running
 tick counter shows in the mode pill. Scrolling only reaches a host once paired.
 
 ### Countdown
 A full-bleed progress ring (idle grey / running amber / finished red) around a
 big `MM:SS` readout. **Rotate** (while not running) sets the time in **30 s**
-steps, 0–59:59. **Press** starts / pauses; press when finished resets to the last
+steps, 0–59:59. **Tapping the centre** starts / pauses; tapping when finished resets to the last
 value. At zero the ring flashes and the DRV2605 buzzes.
 
 ### Settings
-A focusable list: **Brightness** (press to edit, then rotate ±5 % — drives the
+A focusable list: **Brightness** (tap to edit, then rotate ±5 % — drives the
 backlight PWM live, with a progress bar), **Haptics** (ON/OFF, gates all haptic
 feedback), **Bluetooth** (`DISCONNECT` — forgets every bond and drops the link),
 and **Always-On** (`AUTO`, static for now).
@@ -225,7 +225,6 @@ per detent.
 - **Scroll feels backwards?** Set `WHEEL_INVERT` to `true`.
 - **False reverse counts on slow turns?** Raise `REST_QUIET_US` toward
   `8000`–`10000`; if fast cranking drops clicks, lower toward `2000` (default `5000`).
-- **Back long-press too fast/slow?** Change `BTN_LONGPRESS_MS` (default `600`).
 - **Timer step / max?** `TM_STEP` and `TM_MAX` in `ui_timer.cpp`.
 - **Haptic feel?** The `HAPTIC_FX_*` effect ids in `haptics.h`.
 - **Debugging?** Set `DIAG 1` for a boot delay, an I²C scan, and setup logs.

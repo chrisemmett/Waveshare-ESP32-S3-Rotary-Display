@@ -63,6 +63,7 @@ static void makeRow(int i, const char *label, const char *val, uint32_t valCol) 
 }
 
 static void row_click_cb(lv_event_t *e) {
+  appHapticPress();
   s_focus = (int)(intptr_t)lv_event_get_user_data(e);
   applyFocus();
   settings_press();

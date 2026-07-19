@@ -176,11 +176,13 @@ static void applyFocus(bool animate) {
 // ---- Touch: tap a ring item ----
 static void item_click_cb(lv_event_t *e) {
   int idx = (int)(intptr_t)lv_event_get_user_data(e);
+  appHapticPress();
   if (idx == s_sel) navGo(APPS[s_sel].screen);   // tap focused = open
   else { s_sel = idx; applyFocus(true); }
 }
 static void center_click_cb(lv_event_t *e) {
   (void)e;
+  appHapticPress();
   navGo(APPS[s_sel].screen);
 }
 

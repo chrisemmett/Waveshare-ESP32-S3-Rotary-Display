@@ -62,13 +62,13 @@
 #define ENC_A_PIN 8
 #define ENC_B_PIN 7
 
-// Push button (pressing the knob) - GPIO0, active low.
-#define BTN_PIN 0
+// NOTE: this knob has NO shaft press. GPIO0 is only the BOOT button (used for
+// flashing), not a usable UI button - so the UI is driven entirely by rotate +
+// touch. No BTN_PIN is read at runtime.
 
 // ============================ Tunables ============================
 #define PULSES_PER_DETENT 1
 #define WHEEL_INVERT false            // flip if scroll direction feels backwards
-#define BTN_LONGPRESS_MS 600          // hold this long = "back to launcher"
 #define BL_PWM_FREQ 5000
 #define BL_PWM_RES 8                  // 8-bit duty (0..255)
 
@@ -328,9 +328,6 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ENC_A_PIN), encISR, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENC_B_PIN), encISR, CHANGE);
 
-  // Button
-  pinMode(BTN_PIN, INPUT_PULLUP);
-
   // Backlight (start dim-ish; Settings can change it)
   backlightInit();
   backlightWrite(g_brightness);
@@ -365,29 +362,6 @@ void setup() {
   Serial.println("=== setup done ===");
 }
 
-// Reads button edges into short-press (confirm) / long-press (back) events.
-static void serviceButton() {
-  static bool wasDown = false;
-  static uint32_t downMs = 0;
-  static bool longFired = false;
-  bool down = (digitalRead(BTN_PIN) == LOW);
-  uint32_t now = millis();
-
-  if (down && !wasDown) {          // press edge
-    downMs = now;
-    longFired = false;
-    appHapticPress();
-  } else if (down && wasDown) {    // held
-    if (!longFired && (now - downMs) >= BTN_LONGPRESS_MS) {
-      longFired = true;
-      uiBack();                    // long-press = back to launcher
-    }
-  } else if (!down && wasDown) {   // release edge
-    if (!longFired) uiPress();     // short-press = confirm
-  }
-  wasDown = down;
-}
-
 void loop() {
   // LVGL tick
   static uint32_t lastMs = 0;
@@ -408,9 +382,6 @@ void loop() {
       uiEncoder(dir);
     }
   }
-
-  // Button
-  serviceButton();
 
   // BLE connection edges
   static bool prevConn = false;
