@@ -158,7 +158,7 @@ static void refreshCenter(void) {
   lv_label_set_text(s_name, APPS[s_sel].name);
   lv_label_set_text(s_desc, APPS[s_sel].desc);
   char meta[40];
-  snprintf(meta, sizeof(meta), "%d / %d  ·  PRESS TO OPEN", s_sel + 1, APP_N);
+  snprintf(meta, sizeof(meta), "%d / %d  ·  TAP TO OPEN", s_sel + 1, APP_N);
   lv_label_set_text(s_meta, meta);
 }
 
@@ -209,7 +209,7 @@ static void build(void) {
   lv_obj_set_width(s_desc, 180);
   lv_obj_set_style_text_align(s_desc, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_align(s_desc, LV_ALIGN_CENTER, 0, 30);
-  s_meta = make_label(s_scr, "1 / 3  ·  PRESS TO OPEN", &font_jbm_10, COL_FAINT);
+  s_meta = make_label(s_scr, "1 / 3  ·  TAP TO OPEN", &font_jbm_10, COL_FAINT);
   lv_obj_set_style_text_letter_space(s_meta, 2, 0);
   lv_obj_align(s_meta, LV_ALIGN_CENTER, 0, 56);
 

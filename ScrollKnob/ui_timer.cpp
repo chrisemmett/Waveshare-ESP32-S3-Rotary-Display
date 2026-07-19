@@ -58,7 +58,7 @@ static void redraw(void) {
   else if (s_state == TS_PAUSE) { st = "PAUSED";       sc = COL_DIM;   }
   else if (s_state == TS_DONE)  { st = "TIME'S UP";    sc = COL_RED;   }
   else if (s_left == 0)         { st = "TURN TO SET";  sc = COL_FAINT; }
-  else                          { st = "PRESS TO START"; sc = COL_DIM; }
+  else                          { st = "TAP TO START"; sc = COL_DIM; }
   lv_label_set_text(s_status, st);
   lv_obj_set_style_text_color(s_status, lv_color_hex(sc), 0);
 }
@@ -96,7 +96,7 @@ static void build(void) {
   lv_obj_add_flag(s_time, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_event_cb(s_time, center_click_cb, LV_EVENT_CLICKED, NULL);
 
-  s_status = make_label(s_scr, "PRESS TO START", &font_jbm_10, COL_DIM);
+  s_status = make_label(s_scr, "TAP TO START", &font_jbm_10, COL_DIM);
   lv_obj_set_style_text_letter_space(s_status, 2, 0);
   lv_obj_align(s_status, LV_ALIGN_CENTER, 0, 34);
 
