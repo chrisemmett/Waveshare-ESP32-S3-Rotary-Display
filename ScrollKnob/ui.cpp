@@ -62,11 +62,11 @@ lv_obj_t *make_screen_base(void) {
   lv_obj_t *scr = lv_obj_create(NULL);
   lv_obj_remove_style_all(scr);
   lv_obj_set_size(scr, SCR_W, SCR_W);
-  // Approximate the radial bg with a vertical gradient (lighter top -> dark).
+  // Solid dark background. A gradient over this near-black range bands badly on
+  // RGB565 (and reads green, since green has 6 bits vs 5) - COL_BG is neutral in
+  // 565, and a flat fill can't band.
   lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
-  lv_obj_set_style_bg_color(scr, lv_color_hex(COL_BG_TOP), 0);
-  lv_obj_set_style_bg_grad_color(scr, lv_color_hex(COL_BG_BOT), 0);
-  lv_obj_set_style_bg_grad_dir(scr, LV_GRAD_DIR_VER, 0);
+  lv_obj_set_style_bg_color(scr, lv_color_hex(COL_BG), 0);
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
   return scr;
 }

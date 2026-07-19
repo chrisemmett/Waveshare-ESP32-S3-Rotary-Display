@@ -17,8 +17,6 @@
 #define COL_FAINT   0x5f5c56
 #define COL_FAINT2  0x6b675f
 #define COL_BG      0x0b0b0d
-#define COL_BG_TOP  0x141414
-#define COL_BG_BOT  0x060607
 #define COL_TRACK   0x232326  // approx rgba(255,255,255,.07) over bg
 
 #define SCR_W 360
