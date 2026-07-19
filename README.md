@@ -71,8 +71,10 @@ Everything is in [`ScrollKnob/`](ScrollKnob):
 - `ui.cpp` + `ui_launcher.cpp` / `ui_scroll.cpp` / `ui_timer.cpp` /
   `ui_settings.cpp` — the LVGL screens (see `ui_internal.h` for shared tokens).
 - `haptics.cpp` / `haptics.h` — minimal DRV2605 driver over the shared I²C bus.
-- `fonts/*.c` — LVGL fonts generated from Space Grotesk / JetBrains Mono by
+- `src/*.c` — LVGL fonts generated from Space Grotesk / JetBrains Mono by
   [`tools/gen_lvgl_fonts.sh`](tools/gen_lvgl_fonts.sh); declared in `fonts_knob.h`.
+  (They live in `src/` because the Arduino build only compiles the sketch root
+  and a `src/` subfolder — not arbitrary subdirectories.)
 - `build_opt.h` — global compiler flags (see below).
 
 **Display orientation.** `LCD_ROTATION` (top of the `.ino`; `2` = flipped 180°
@@ -110,7 +112,7 @@ If your colours come out byte-swapped on first boot, flip `LV_COLOR_16_SWAP` to
 
 ### 3. Fonts
 
-The generated LVGL fonts are committed under `ScrollKnob/fonts/`. To regenerate
+The generated LVGL fonts are committed under `ScrollKnob/src/`. To regenerate
 (e.g. to change sizes or add glyphs), run [`tools/gen_lvgl_fonts.sh`](tools/gen_lvgl_fonts.sh)
 (needs Node.js; pulls the TTFs from the `@fontsource` npm packages and runs
 `lv_font_conv`).

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerate the LVGL C fonts in ScrollKnob/fonts/ from Space Grotesk and
+# Regenerate the LVGL C fonts in ScrollKnob/src/ from Space Grotesk and
 # JetBrains Mono. Requires Node.js. Fetches the TTF/WOFF from the @fontsource
 # npm packages (no Google Fonts download needed) and runs lv_font_conv.
 #
@@ -12,7 +12,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$HERE")"
-OUT="$ROOT/ScrollKnob/fonts"
+OUT="$ROOT/ScrollKnob/src"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
