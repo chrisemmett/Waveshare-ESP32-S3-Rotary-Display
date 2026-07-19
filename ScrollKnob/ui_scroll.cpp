@@ -98,6 +98,7 @@ static void build(void) {
   lv_obj_set_style_border_opa(s_pill, 90, 0);
   lv_obj_align(s_pill, LV_ALIGN_BOTTOM_MID, 0, -44);
   lv_obj_add_flag(s_pill, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_ext_click_area(s_pill, 24);  // easier to tap the mode toggle
   lv_obj_add_event_cb(s_pill, pill_click_cb, LV_EVENT_CLICKED, NULL);
   updatePill();
 }

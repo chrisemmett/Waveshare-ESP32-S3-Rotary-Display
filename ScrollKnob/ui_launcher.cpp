@@ -194,6 +194,7 @@ static void build(void) {
     lv_obj_set_size(it, ITEM_SZ, ITEM_SZ);
     lv_obj_clear_flag(it, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(it, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(it, 28);  // enlarge the hit area beyond the 58px circle
     lv_obj_t *icon = make_app_icon(it, i, 26, COL_ACCENT);
     lv_obj_center(icon);
     lv_obj_add_event_cb(it, item_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
@@ -212,8 +213,18 @@ static void build(void) {
   lv_obj_set_style_text_letter_space(s_meta, 2, 0);
   lv_obj_align(s_meta, LV_ALIGN_CENTER, 0, 56);
 
-  lv_obj_add_flag(s_name, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_add_event_cb(s_name, center_click_cb, LV_EVENT_CLICKED, NULL);
+  // Big transparent centre "open" target: a tap anywhere in the middle opens the
+  // focused app (far more forgiving than hitting the small icon/label). Sized to
+  // clear the ring items at radius 128, so it never steals their taps.
+  lv_obj_t *hit = lv_obj_create(s_scr);
+  lv_obj_remove_style_all(hit);
+  lv_obj_set_size(hit, 176, 176);
+  lv_obj_center(hit);
+  lv_obj_set_style_radius(hit, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_opa(hit, LV_OPA_TRANSP, 0);
+  lv_obj_clear_flag(hit, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(hit, center_click_cb, LV_EVENT_CLICKED, NULL);
 
   applyFocus(false);
 }

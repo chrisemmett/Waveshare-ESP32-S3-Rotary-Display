@@ -52,6 +52,7 @@ static void makeRow(int i, const char *label, const char *val, uint32_t valCol) 
   lv_obj_set_style_pad_ver(r, 9, 0);
   lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_flag(r, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_ext_click_area(r, 6);  // small comfort margin (rows are already 8px apart)
 
   lv_obj_t *l = make_label(r, label, &font_sg_14, COL_TX2);
   lv_obj_align(l, LV_ALIGN_TOP_LEFT, 0, 0);

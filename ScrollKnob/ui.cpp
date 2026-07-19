@@ -120,17 +120,18 @@ static void back_click_cb(lv_event_t *e) {
 lv_obj_t *make_back_chevron(lv_obj_t *parent) {
   lv_obj_t *box = lv_obj_create(parent);
   lv_obj_remove_style_all(box);
-  lv_obj_set_size(box, 70, 34);
-  lv_obj_align(box, LV_ALIGN_BOTTOM_MID, 0, -6);
+  lv_obj_set_size(box, 110, 48);
+  lv_obj_align(box, LV_ALIGN_BOTTOM_MID, 0, -4);
   lv_obj_add_flag(box, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_ext_click_area(box, 22);  // generous hit area around a small glyph
   lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
 
   lv_obj_t *tri = make_triangle(box, 14, 7, true, COL_FAINT2);
-  lv_obj_align(tri, LV_ALIGN_TOP_MID, 0, 2);
+  lv_obj_align(tri, LV_ALIGN_CENTER, 0, -9);
 
   lv_obj_t *lbl = make_label(box, "MENU", &font_jbm_10, COL_FAINT2);
   lv_obj_set_style_text_letter_space(lbl, 2, 0);
-  lv_obj_align(lbl, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 6);
 
   lv_obj_add_event_cb(box, back_click_cb, LV_EVENT_CLICKED, NULL);
   return box;

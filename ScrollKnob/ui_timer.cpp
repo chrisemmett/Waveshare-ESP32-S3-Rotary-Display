@@ -100,6 +100,18 @@ static void build(void) {
   lv_obj_set_style_text_letter_space(s_status, 2, 0);
   lv_obj_align(s_status, LV_ALIGN_CENTER, 0, 34);
 
+  // Large transparent centre target: tap anywhere inside the ring to
+  // start/pause/reset (the MM:SS label alone was too small to hit).
+  lv_obj_t *hit = lv_obj_create(s_scr);
+  lv_obj_remove_style_all(hit);
+  lv_obj_set_size(hit, 210, 210);
+  lv_obj_center(hit);
+  lv_obj_set_style_radius(hit, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_opa(hit, LV_OPA_TRANSP, 0);
+  lv_obj_clear_flag(hit, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(hit, center_click_cb, LV_EVENT_CLICKED, NULL);
+
   redraw();
 }
 
