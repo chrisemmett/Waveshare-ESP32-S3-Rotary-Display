@@ -31,6 +31,9 @@ void appHapticTick(void);   // short click on each detent
 void appHapticPress(void);  // stronger click on a press
 void appHapticAlarm(void);  // long buzz at timer end
 
+// Hardware RNG (esp_random) - used by the Safe Cracker combo generator.
+uint32_t appRandom(void);
+
 #ifdef __cplusplus
 }
 #endif

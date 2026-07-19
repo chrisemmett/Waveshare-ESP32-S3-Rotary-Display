@@ -14,6 +14,7 @@ void navGo(ScreenId id) {
     case SCR_SCROLL:   scroll_show();   break;
     case SCR_TIMER:    timer_show();    break;
     case SCR_SETTINGS: settings_show(); break;
+    case SCR_GAME:     game_show();     break;
   }
 }
 
@@ -28,6 +29,7 @@ void uiEncoder(int32_t dir) {
     case SCR_SCROLL:   scroll_encoder(dir);   break;
     case SCR_TIMER:    timer_encoder(dir);    break;
     case SCR_SETTINGS: settings_encoder(dir); break;
+    case SCR_GAME:     game_encoder(dir);     break;
   }
 }
 
@@ -47,6 +49,7 @@ void uiBack(void) {
 void uiTick(void) {
   if (s_cur == SCR_SCROLL) scroll_tick();
   else if (s_cur == SCR_TIMER) timer_tick();
+  else if (s_cur == SCR_GAME) game_tick();
 }
 
 void uiConnChanged(bool connected) {

@@ -54,6 +54,18 @@ big `MM:SS` readout. **Rotate** (while not running) sets the time in **30 s**
 steps, 0–59:59. **Tapping the centre** starts / pauses; tapping when finished resets to the last
 value. At zero the ring flashes and the DRV2605 buzzes.
 
+### Safe Cracker
+A safe-cracking game (5-tumbler combo, dial 0–49, wraps). Rotate to hunt for each
+tumbler; a **listening waveform** and status label (`QUIET` → `GETTING WARMER` →
+`VERY STRONG`) strengthen as you near the target. Each tumbler must be approached
+from a required direction (alternating CW/ACW, shown by the arrow up top);
+arriving from the correct direction and **holding the dial still for 3 s** (a ring
+fills around the number) captures it — any movement cancels the hold. Five
+captures → **SAFE OPEN**. Five dots track progress. Tap **NEW** (top-left) — or
+tap the centre once open — to start a fresh game; **MENU** returns to the
+launcher. The combo can be printed to Serial with `GAME_DEBUG 1`; flip
+`GAME_INVERT_DIR` if clockwise feels reversed (both in `ui_game.cpp`).
+
 ### Settings
 A focusable list: **Brightness** (tap to edit, then rotate ±5 % — drives the
 backlight PWM live, with a progress bar), **Haptics** (ON/OFF, gates all haptic
@@ -69,7 +81,8 @@ Everything is in [`ScrollKnob/`](ScrollKnob):
   display/touch driver + input dispatch. Exposes hardware services via `app.h`
   and forwards input to the UI via `ui.h`.
 - `ui.cpp` + `ui_launcher.cpp` / `ui_scroll.cpp` / `ui_timer.cpp` /
-  `ui_settings.cpp` — the LVGL screens (see `ui_internal.h` for shared tokens).
+  `ui_settings.cpp` / `ui_game.cpp` — the LVGL screens (see `ui_internal.h` for
+  shared tokens).
 - `haptics.cpp` / `haptics.h` — minimal DRV2605 driver over the shared I²C bus.
 - `src/*.c` — LVGL fonts generated from Space Grotesk / JetBrains Mono by
   [`tools/gen_lvgl_fonts.sh`](tools/gen_lvgl_fonts.sh); declared in `fonts_knob.h`.

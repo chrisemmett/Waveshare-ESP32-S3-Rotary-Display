@@ -7,12 +7,13 @@
 #define DEG2RAD 0.017453292519943295
 #define RING_R 128
 #define ITEM_SZ 58
-#define APP_N 3
+#define APP_N 4
 
 struct AppDef { const char *name; const char *desc; ScreenId screen; };
 static const AppDef APPS[APP_N] = {
   { "Scroll Wheel", "Laptop scroll over BLE HID", SCR_SCROLL },
   { "Countdown",    "Timer with haptic alarm",    SCR_TIMER  },
+  { "Safe Cracker", "Crack the combo by ear",     SCR_GAME   },
   { "Settings",     "Display, haptics, network",  SCR_SETTINGS },
 };
 
@@ -91,6 +92,18 @@ static lv_obj_t *make_app_icon(lv_obj_t *parent, int appIdx, int sz, uint32_t co
     lv_obj_set_style_bg_opa(hand, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(hand, 1, 0);
     lv_obj_align(hand, LV_ALIGN_CENTER, 0, sz * 6 / 100);
+  } else if (appIdx == 2) {  // safe: body + combo dial + handle
+    lv_obj_t *body = strokeRect(c, sz * 8 / 10, sz * 8 / 10, sz * 15 / 100, col);
+    lv_obj_center(body);
+    lv_obj_t *dial = strokeRect(c, sz * 3 / 10, sz * 3 / 10, LV_RADIUS_CIRCLE, col);
+    lv_obj_align(dial, LV_ALIGN_CENTER, -sz * 6 / 100, 0);
+    lv_obj_t *handle = lv_obj_create(c);
+    lv_obj_remove_style_all(handle);
+    lv_obj_set_size(handle, sz * 22 / 100, 2);
+    lv_obj_set_style_bg_color(handle, lv_color_hex(col), 0);
+    lv_obj_set_style_bg_opa(handle, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(handle, 1, 0);
+    lv_obj_align(handle, LV_ALIGN_CENTER, sz * 22 / 100, 0);
   } else {  // sliders: three lines with knobs
     int y0 = sz * 22 / 100, gap = sz * 28 / 100, w = sz * 8 / 10, x0 = sz / 10;
     hline(c, x0, y0, w, col);            dot(c, x0 + w * 6 / 10, y0 - 2, 6, col);

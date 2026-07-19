@@ -26,6 +26,7 @@
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
 #include <Wire.h>
+#include <esp_random.h>  // esp_random() for the Safe Cracker combo generator
 
 #include "app.h"
 #include "ui.h"
@@ -240,6 +241,7 @@ bool appHapticsEnabled(void) { return g_hapticsOn; }
 void appHapticTick(void)  { if (g_hapticsOn && g_hapticsPresent) hapticsPlay(HAPTIC_FX_TICK); }
 void appHapticPress(void) { if (g_hapticsOn && g_hapticsPresent) hapticsPlay(HAPTIC_FX_PRESS); }
 void appHapticAlarm(void) { if (g_hapticsOn && g_hapticsPresent) hapticsPlay(HAPTIC_FX_ALARM); }
+uint32_t appRandom(void)  { return esp_random(); }
 
 // ============================ LVGL display + input ============================
 #define LV_BUF_LINES 40
