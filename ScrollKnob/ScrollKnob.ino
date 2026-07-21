@@ -217,6 +217,32 @@ static void backlightWrite(uint8_t pct) {
 #endif
 }
 
+// ============================ Screen blanking (idle timeout) ============================
+// Blank the panel (backlight off) after SCREEN_TIMEOUT_MS with no dial/touch
+// input. Turning the dial or tapping the screen wakes it; while blank, that
+// wake input is swallowed so it never doubles as a UI action.
+#define SCREEN_TIMEOUT_MS 10000
+static uint32_t g_lastActivityMs = 0;
+static bool g_screenBlank = false;
+static bool g_consumeTouch = false;  // swallow the waking touch until the finger lifts
+
+static void screenNoteActivity() { g_lastActivityMs = millis(); }
+
+static void screenWake() {
+  if (g_screenBlank) {
+    g_screenBlank = false;
+    backlightWrite(g_brightness);
+  }
+  g_lastActivityMs = millis();
+}
+
+static void screenBlank() {
+  if (!g_screenBlank) {
+    g_screenBlank = true;
+    backlightWrite(0);
+  }
+}
+
 // ============================ Haptics gate ============================
 static bool g_hapticsOn = true;
 static bool g_hapticsPresent = false;
@@ -262,10 +288,22 @@ static void lvTouchRead(lv_indev_drv_t *drv, lv_indev_data_t *data) {
   static int lx = 0, ly = 0;
   int x, y;
   if (tpRead(&x, &y)) {
+    if (g_screenBlank || g_consumeTouch) {
+      // Tap wakes the screen; swallow this touch (and every sample until the
+      // finger lifts) so waking never registers as a UI tap.
+      g_consumeTouch = true;
+      screenWake();
+      data->state = LV_INDEV_STATE_RELEASED;
+      data->point.x = lx;
+      data->point.y = ly;
+      return;
+    }
+    screenNoteActivity();
     lx = x;
     ly = y;
     data->state = LV_INDEV_STATE_PRESSED;
   } else {
+    g_consumeTouch = false;
     data->state = LV_INDEV_STATE_RELEASED;
   }
   data->point.x = lx;
@@ -361,6 +399,8 @@ void setup() {
   lvglInit();
   uiInit();
 
+  screenNoteActivity();  // start the idle-blank countdown from here
+
   Serial.println("=== setup done ===");
 }
 
@@ -377,11 +417,17 @@ void loop() {
   long delta = raw - lastRaw;
   lastRaw = raw;
   if (delta != 0) {
-    int dir = (delta > 0) ? 1 : -1;
-    long n = labs(delta);
-    for (long i = 0; i < n; i++) {
-      appHapticTick();
-      uiEncoder(dir);
+    if (g_screenBlank) {
+      // Dial wakes the screen; swallow the motion so it doesn't also scroll.
+      screenWake();
+    } else {
+      screenNoteActivity();
+      int dir = (delta > 0) ? 1 : -1;
+      long n = labs(delta);
+      for (long i = 0; i < n; i++) {
+        appHapticTick();
+        uiEncoder(dir);
+      }
     }
   }
 
@@ -391,6 +437,11 @@ void loop() {
   if (conn != prevConn) {
     uiConnChanged(conn);
     prevConn = conn;
+  }
+
+  // Blank the panel after SCREEN_TIMEOUT_MS of no dial/touch input.
+  if (!g_screenBlank && (uint32_t)(now - g_lastActivityMs) >= SCREEN_TIMEOUT_MS) {
+    screenBlank();
   }
 
   // UI per-frame logic + LVGL render
