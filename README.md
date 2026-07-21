@@ -1,137 +1,157 @@
 # rotary-display
 
-Turn a **Waveshare ESP32-S3-Knob-Touch-LCD-1.8** into a scroll wheel — over
-**USB** or **Bluetooth** — that uses its round display to show what it's doing.
+Turn a **Waveshare ESP32-S3-Knob-Touch-LCD-1.8** into a polished, **multi-function
+knob** — a radial-arc launcher on its 360×360 round display with three apps:
 
-The sketch has two build modes, chosen by the `USE_BLE` toggle at the top of
-[`ScrollKnob/ScrollKnob.ino`](ScrollKnob/ScrollKnob.ino):
+- **Scroll Wheel** — a Bluetooth-HID scroll controller for a laptop.
+- **Countdown** — a timer with a depleting progress ring and a haptic alarm.
+- **Settings** — brightness, haptics, and Bluetooth disconnect.
 
-- **USB mode (`USE_BLE 0`).** Turn the knob and the screen shows a green **up**
-  arrow / orange **down** arrow, a running detent counter, and a speed bar. The
-  board acts as a USB mouse wheel and scrolls whatever window has focus. Press
-  the knob to zero the counter.
-- **Bluetooth mode (`USE_BLE 1`, the default).** The board is a BLE mouse wheel.
-  See [Bluetooth mode](#bluetooth-mode) below for the pairing and screen
-  behaviour.
+The UI is built with **LVGL 8.4** (real fonts, anti-aliased arcs, animated ring
+transitions), driven by the knob's rotary encoder + push button, the CST816
+touch panel, and a DRV2605 haptic motor. It brings the ST77916 QSPI panel up
+itself with Arduino_GFX and decodes the knob with a small interrupt-driven state
+machine.
 
-> **Status:** working end-to-end on real hardware. Getting there took untangling
-> several board-specific quirks that aren't obvious from the datasheet or the
-> usual example code — they're all written up in
+> **Status:** the hardware bring-up (panel init, encoder decode, touch, BLE) is
+> proven on real hardware; the LVGL UI on top is new. Getting the board itself
+> working took untangling several board-specific quirks — they're written up in
 > [Lessons learned](#lessons-learned-read-this-before-you-debug) below. If
 > something doesn't work, start there.
 
-## The sketch
+> **History:** an earlier single-file build (plain Arduino_GFX; a USB **or** BLE
+> scroll wheel with an on-screen menu) lives in the git history. This rewrite
+> replaces that UI layer with LVGL while reusing the same hardware layer.
 
-Everything lives in [`ScrollKnob/ScrollKnob.ino`](ScrollKnob/ScrollKnob.ino).
-It is a single, self-contained sketch — no LVGL, no config headers. It brings
-the ST77916 panel up itself with the Arduino_GFX library and decodes the knob
-with a small interrupt-driven state machine (no extra encoder library needed).
+## Interaction model
 
-**Display orientation.** The panel is rotated via `LCD_ROTATION` near the top of
-the sketch (`0` = normal, `2` = flipped 180° for an upside-down mount; `1`/`3` =
-90°/270°). This drives both the drawing and the touch mapping — `tpRead()`
-mirrors the raw CST816 coordinates to match when `LCD_ROTATION` is `2`, so the
-DISCONNECT button still lines up after a flip.
+This knob has **no shaft press** — the UI is driven by **rotate + touch**.
+(GPIO0 is only the BOOT button, used for flashing, not a UI control.)
 
-## Bluetooth mode
+| Input | Effect |
+|---|---|
+| **Rotate** | Move focus / adjust the active value. One detent fires a short haptic. |
+| **Tap** | Activate — open the focused app (tap the centre or its icon), start/pause the timer (tap the centre), toggle the scroll mode pill, or activate a settings row. Fires a confirm haptic. |
+| **Tap MENU** | The chevron at bottom-centre returns to the launcher from any app. |
 
-With `USE_BLE 1` (the default) the board is a **Bluetooth Low Energy mouse
-wheel** built on the ESP32-S3's radio — no dongle, no extra hardware. It uses
-[NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino) for a small-footprint
-HID-over-GATT implementation, and the board's **CST816 touch panel** (idle until
-now) for the on-screen controls.
+## The apps
 
-### Behaviour
+### Launcher (radial arc menu) — the home screen
+App icons sit on a ring; the **focused one animates to 12 o'clock** under a fixed
+pointer, enlarged and glowing, the others dimmed around the ring. The centre
+shows the focused app's icon, name, description, and a `"{i} / {n} · PRESS TO
+OPEN"` meta line. Rotate to change focus; tap the centre (or the focused item) to open.
 
-| Situation | Screen | What's happening |
+### Scroll Wheel
+Rotating emits BLE HID wheel events to a paired host. A viewport scrolls with the
+knob and the active-direction chevron highlights (fading ~480 ms after the last
+tick). **Tapping the mode pill toggles LINE / PAGE** (PAGE sends a larger delta); a running
+tick counter shows in the mode pill. Scrolling only reaches a host once paired.
+
+### Countdown
+A full-bleed progress ring (idle grey / running amber / finished red) around a
+big `MM:SS` readout. **Rotate** (while not running) sets the time in **30 s**
+steps, 0–59:59. **Tapping the centre** starts / pauses; tapping when finished resets to the last
+value. At zero the ring flashes and the DRV2605 buzzes.
+
+### Safe Cracker
+A safe-cracking game (5-tumbler combo, dial 0–49, wraps). Rotate to hunt for each
+tumbler; a **listening waveform** and status label (`QUIET` → `GETTING WARMER` →
+`VERY STRONG`) strengthen as you near the target. Each tumbler must be approached
+from a required direction (alternating CW/ACW, shown by the arrow up top);
+arriving from the correct direction and **holding the dial still for 3 s** (a ring
+fills around the number) captures it — any movement cancels the hold. Five
+captures → **SAFE OPEN**. Five dots track progress. Tap **NEW** (top-left) — or
+tap the centre once open — to start a fresh game; **MENU** returns to the
+launcher. The combo can be printed to Serial with `GAME_DEBUG 1`; flip
+`GAME_INVERT_DIR` if clockwise feels reversed (both in `ui_game.cpp`).
+
+### Settings
+A focusable list: **Brightness** (tap to edit, then rotate ±5 % — drives the
+backlight PWM live, with a progress bar), **Haptics** (ON/OFF, gates all haptic
+feedback), **Bluetooth** (`DISCONNECT` — forgets every bond and drops the link),
+and **Always-On** (`AUTO`, static for now).
+
+## Code layout
+
+Everything is in [`ScrollKnob/`](ScrollKnob):
+
+- `ScrollKnob.ino` — hardware + glue: ST77916/QSPI bring-up, the encoder ISR,
+  CST816 touch, NimBLE HID mouse, backlight PWM, DRV2605 init, and the LVGL
+  display/touch driver + input dispatch. Exposes hardware services via `app.h`
+  and forwards input to the UI via `ui.h`.
+- `ui.cpp` + `ui_launcher.cpp` / `ui_scroll.cpp` / `ui_timer.cpp` /
+  `ui_settings.cpp` / `ui_game.cpp` — the LVGL screens (see `ui_internal.h` for
+  shared tokens).
+- `haptics.cpp` / `haptics.h` — minimal DRV2605 driver over the shared I²C bus.
+- `src/*.c` — LVGL fonts generated from Space Grotesk / JetBrains Mono by
+  [`tools/gen_lvgl_fonts.sh`](tools/gen_lvgl_fonts.sh); declared in `fonts_knob.h`.
+  (They live in `src/` because the Arduino build only compiles the sketch root
+  and a `src/` subfolder — not arbitrary subdirectories.)
+- `build_opt.h` — global compiler flags (see below).
+
+**Display orientation.** `LCD_ROTATION` (top of the `.ino`; `2` = flipped 180°
+for an upside-down mount) drives both drawing and the touch mapping — `tpRead()`
+mirrors the raw CST816 coordinates so taps line up after a flip.
+
+## Building
+
+### 1. Libraries (Arduino IDE → Tools → Manage Libraries…)
+
+| Library | Author | Why |
 |---|---|---|
-| **Unpaired** | Backlight on, shows **"DISCOVERABLE"** | Advertising as an HID mouse; pair it from your PC's Bluetooth settings (it shows up as **ScrollKnob**). Pairing is "Just Works" — no PIN. |
-| **Connected, knob still** | **Off** (panel cleared, backlight off) | The dark screen is the normal resting state. |
-| **Connected, turning the knob** | A little **man runs** across the dial | While the screen is otherwise dark, turning the wheel wakes it and animates a run cycle — he runs faster the faster you turn, and faces the direction you scroll. It blanks again ~1.5 s after you stop. |
-| **Tap the dark screen** | Shows a **DISCONNECT** button | You have 10 s to act. |
-| **Tap DISCONNECT** | → back to "DISCOVERABLE" | *Forgets every Bluetooth bond* and drops the link, so the host must re-pair. |
-| **No tap for 10 s** | → back to **off** | The prompt times out. |
+| **GFX Library for Arduino** | moononournation | drives the ST77916 QSPI panel (LVGL's flush target) |
+| **lvgl** (8.4.x) | LVGL | the UI toolkit |
+| **NimBLE-Arduino** (2.x) | h2zero | BLE HID mouse (the Scroll app) |
 
-The scroll direction, `WHEEL_INVERT`, and `PULSES_PER_DETENT` tunables work
-exactly as in USB mode. Scrolling is ignored while unpaired (so it can't jump
-the instant you connect).
+Install "esp32 by Espressif Systems" via the Boards Manager if you haven't. No
+encoder or touch library is needed — both are driven inline.
 
-> **Notes**
-> - The running sprite is stored in [`ScrollKnob/sprites.h`](ScrollKnob/sprites.h)
->   as an indexed-palette run cycle (scaled up with `fillRect` blocks). It is
->   generated from the [`walk cycle.png`](walk%20cycle.png) sprite sheet by
->   [`tools/png_to_sprites.py`](tools/png_to_sprites.py) — replace the PNG and
->   re-run `python3 tools/png_to_sprites.py emit` to change the character
->   (`preview` renders a PNG to eyeball first). Tune `RUN_IDLE_MS` (blank delay)
->   and `RUN_STEP_DETENTS` (leg speed) at the top of the sketch.
-> - The S3 does **BLE**, not Bluetooth Classic. A BLE HID mouse is supported
->   natively by Windows, macOS, Linux, Android and iOS/iPadOS.
-> - This board has no battery, so "Bluetooth" means the *data* is wireless — it
->   still needs USB (or any 5 V source) for power.
-> - The 10 s timeout is `DISCONNECT_PROMPT_MS` at the top of the sketch.
+### 2. LVGL configuration (no `lv_conf.h` to place)
 
-### Extra requirements for BLE mode
+Rather than the usual hunt-for-`lv_conf.h`, this sketch injects LVGL's config via
+compiler flags in [`ScrollKnob/build_opt.h`](ScrollKnob/build_opt.h) (Arduino
+applies that file to every translation unit):
 
-- **Library:** install **NimBLE-Arduino** by h2zero, **version 2.x** (Library
-  Manager). The sketch uses the 2.x API (`getInputReport`, `enableScanResponse`,
-  the two-argument connection callbacks); 1.x will not compile.
-- **Board settings:** identical to USB mode (see below). The NimBLE stack fits
-  comfortably in the 3 MB app partition, and `USB Mode: USB-OTG (TinyUSB)` is
-  still fine — it's just not required for HID here.
-- Switch back to USB by setting `USE_BLE 0`; NimBLE is then not needed.
+```
+-DLV_CONF_SKIP=1              # use LVGL's built-in defaults...
+-DLV_COLOR_16_SWAP=1          # ...overridden here: big-endian 565 for the QSPI panel
+-DLV_MEM_SIZE=0x18000         # 96 KB LVGL heap (four retained screens)
+-DLV_LVGL_H_INCLUDE_SIMPLE=1  # fonts include "lvgl.h"
+```
+
+If your colours come out byte-swapped on first boot, flip `LV_COLOR_16_SWAP` to
+`0` and use `draw16bitRGBBitmap` in place of `draw16bitBeRGBBitmap` in `lvFlush`.
+
+### 3. Fonts
+
+The generated LVGL fonts are committed under `ScrollKnob/src/`. To regenerate
+(e.g. to change sizes or add glyphs), run [`tools/gen_lvgl_fonts.sh`](tools/gen_lvgl_fonts.sh)
+(needs Node.js; pulls the TTFs from the `@fontsource` npm packages and runs
+`lv_font_conv`).
+
+### 4. Board settings (Arduino IDE → Tools)
+
+| Setting | Value |
+|---|---|
+| Board | **ESP32S3 Dev Module** — prefer this over a vendor profile; some enable pin remapping, which breaks the Arduino_GFX build (see the compile note below) |
+| PSRAM | **OPI PSRAM** / Enabled (LVGL draw buffers live here) |
+| USB CDC On Boot | **Enabled** |
+| Flash Size | 16MB (128Mb) |
+| Partition Scheme | any scheme **without** an "ESP SR … MODEL" partition, e.g. **16M Flash (3MB APP/9.9MB FATFS)**. LVGL + NimBLE + the fonts are tight in a 3 MB app partition — if the link overflows, use a custom `partitions.csv` with a larger app slot (still no MODEL partition — Lesson 2). |
 
 > **Compiling — `'digitalPinToGPIONumber' is not a type` (handled for you):**
-> this is an Arduino_GFX ↔ ESP32-core incompatibility, not a Bluetooth issue (it
-> breaks USB mode too). Board profiles that define `BOARD_HAS_PIN_REMAP` make the
-> core turn `pinMode` / `digitalRead` / `digitalWrite` into macros that clash
-> with Arduino_GFX's I/O-expander headers. The fix must apply to the *whole*
-> build (Arduino_GFX compiles as its own unit, so a sketch `#undef`/`#define`
-> can't fix it). The sketch folder therefore ships a
-> [`build_opt.h`](ScrollKnob/build_opt.h) containing
-> `-DBOARD_USES_HW_GPIO_NUMBERS`; Arduino copies it into every compile command,
-> which disables the remap macros globally — **so it should just compile, on any
-> board.**
->
-> If your toolchain ignores `build_opt.h`, fall back to either: **select the
-> "ESP32S3 Dev Module" board** (its `esp32s3` variant doesn't enable remapping),
-> or pass the flag yourself — arduino-cli `--build-property
-> "compiler.cpp.extra_flags=-DBOARD_USES_HW_GPIO_NUMBERS"`. (Arduino IDE 2.x may
-> ask you to allow the sketch's build options the first time, and needs a clean
-> rebuild to pick the file up.)
->
-> Separately, the ESP32 core's own `touchRead(pin)` macro (also remap-gated) is
-> why the touch reader here is called `tpRead()`.
+> `build_opt.h` ships `-DBOARD_USES_HW_GPIO_NUMBERS`, which disables the ESP32
+> core's pin-remap macros globally (they clash with Arduino_GFX). It should just
+> compile on any board. If your toolchain ignores `build_opt.h`, select the
+> "ESP32S3 Dev Module" board or pass the flag via
+> `--build-property "compiler.cpp.extra_flags=..."`.
 
 ## Flashing it
 
 This board is unusual to flash. Read [Lesson 1](#1-flashing-the-usb-port-talks-to-two-different-chips)
 and [Lesson 2](#2-flashing-the-partition-scheme-must-not-reserve-a-model-partition)
 before your first upload — the two most confusing failures happen here.
-
-### 1. Libraries (Arduino IDE → Tools → Manage Libraries…)
-
-| Library | Author | Why |
-|---|---|---|
-| **GFX Library for Arduino** | moononournation | drives the ST77916 QSPI panel |
-| **NimBLE-Arduino** (2.x) | h2zero | BLE HID mouse — **only for Bluetooth mode** (`USE_BLE 1`) |
-
-USB HID needs no extra library — it ships with the ESP32 Arduino core (install
-"esp32 by Espressif Systems" via the Boards Manager if you haven't). **No
-encoder library is required** — the knob is decoded in the sketch itself, and
-the CST816 touch panel is driven inline (no touch library needed either).
-
-### 2. Board settings (Arduino IDE → Tools)
-
-| Setting | Value |
-|---|---|
-| Board | **ESP32S3 Dev Module** — prefer this over a vendor-specific profile; some enable pin remapping, which breaks the Arduino_GFX build (see the compile note above) |
-| PSRAM | **OPI PSRAM** / Enabled |
-| USB CDC On Boot | **Enabled** |
-| USB Mode | **USB-OTG (TinyUSB)** ← required for USB mode; harmless in Bluetooth mode |
-| Flash Size | 16MB (128Mb) |
-| Partition Scheme | any scheme **without** an "ESP SR … MODEL" partition, e.g. **16M Flash (3MB APP/9.9MB FATFS)** |
-
-### 3. Put the board into download mode, then upload
 
 Because of the dual-chip design (see Lesson 1), you can't just hit Upload:
 
@@ -147,8 +167,7 @@ Every future flash needs this same dance.
 
 ## Lessons learned (read this before you debug)
 
-Four separate, non-obvious problems stood between "compiles fine" and "works."
-Each is written as **symptom → cause → fix** so you can jump straight to yours.
+Each is written **symptom → cause → fix** so you can jump straight to yours.
 
 ### 1. Flashing: the USB port talks to *two* different chips
 
@@ -158,8 +177,7 @@ ESP32-S3. Wrong chip argument?`
 **Cause:** this is a **dual-MCU board** — an ESP32-S3 (runs the display/knob)
 *and* a classic ESP32 co-processor — sharing a single USB-C port through an
 analog switch. **The orientation of the USB-C plug selects which chip you're
-connected to.** In one orientation esptool talks to the classic ESP32 (hence
-the error); flipped, it talks to the S3.
+connected to.**
 
 **Fix:** flip the USB-C plug so you reach the S3. The S3 side enumerates as
 `/dev/cu.usbmodem…`; the classic-ESP32 side is `/dev/cu.usbserial…`.
@@ -169,108 +187,69 @@ the error); flipped, it talks to the S3.
 **Symptom:** compile succeeds, then upload dies with
 `No such file or directory: …/srmodels.bin`.
 
-**Cause:** the default Waveshare board profile selects a partition scheme like
-**"ESP SR 16M (3MB APP/6MB SPIFFS/3.9MB MODEL)"**. That `MODEL` partition is for
-ESP-SR speech recognition, so the build system expects a `srmodels.bin` to
-flash — but this sketch has no voice model, so the file never exists and the
-flash aborts.
+**Cause:** the default Waveshare profile selects a scheme with an ESP-SR `MODEL`
+partition, so the build expects a `srmodels.bin` this sketch never produces.
 
 **Fix:** choose a partition scheme **without** a MODEL partition, e.g.
 **16M Flash (3MB APP/9.9MB FATFS)**.
 
 ### 3. Display: the panel needs the ST77916 *"150"* init sequence
 
-**Symptom:** the sketch runs (serial is alive, the loop ticks) but the round
-screen shows **garbled lines** instead of the UI.
+**Symptom:** the sketch runs but the round screen shows **garbled lines**.
 
-**Cause:** Arduino_GFX's `Arduino_ST77916` class **defaults to the
-`st77916_180_init_operations`** sequence. This board's panel (`JC3636K518`, a
-1.53″-class 360×360 module) needs the **`st77916_150_init_operations`**
-sequence instead. Wrong init → garbage on screen.
+**Cause:** `Arduino_ST77916` defaults to the `st77916_180_init_operations`
+sequence; this panel (`JC3636K518`) needs **`st77916_150_init_operations`**.
 
-**Fix:** pass the 150 init explicitly to the constructor:
-
-```cpp
-Arduino_GFX *gfx = new Arduino_ST77916(
-  bus, LCD_RST, 0 /* rotation */, true /* IPS */, LCD_W, LCD_H,
-  0, 0, 0, 0,
-  st77916_150_init_operations, sizeof(st77916_150_init_operations));
-```
+**Fix:** pass the 150 init explicitly to the constructor (as this sketch does).
 
 ### 4. Knob: it isn't a normal quadrature encoder
 
-**Symptoms, in the order we hit them:**
-
-- With the **ESP32Encoder** (hardware PCNT) library, the count only ever reached
-  ±1 and never accumulated — PCNT only registered one channel on this board.
-- With a **standard quadrature decoder** (and with Ben Buxton's state-machine
-  decoder), every click flashed *up then down*, or counted nothing at all.
-
 **Cause:** this knob **rests with both channels HIGH (A=B=1) and, per click,
 briefly drops only one channel and returns** — it never walks the full
-`11 → 01 → 00 → 10 → 11` quadrature cycle (we never see `A=B=0`). Textbook
-decoders assume that full cycle, so they either net to zero (count +1 leaving
-rest, −1 returning) or reject the motion entirely. On top of that, contact
-bounce briefly tickles the *other* channel after a click, adding false
-reverse counts.
+quadrature cycle, so textbook decoders net to zero or reject the motion.
 
-**Fix:** a small **debounced excursion decoder** (in the sketch). It reads both
-channels on a pin-change interrupt, takes the direction from *which channel
-drops first* after rest, commits one count when the knob returns to rest, and
-refuses to arm a new count until the knob has been quietly at rest for
-`REST_QUIET_US` — which is what rejects the post-click bounce. This gives a
-clean ±1 per detent.
+**Fix:** a small **debounced excursion decoder** (in the sketch): it takes the
+direction from *which channel drops first* after rest, commits one count on
+return to rest, and refuses to re-arm until quiet for `REST_QUIET_US`. Clean ±1
+per detent.
 
 ## Pin map (this exact board)
-
-Verified against the community configs for the panel module (`JC3636K518`,
-ST77916 + CST816) and Waveshare's schematic. You should not need to touch these.
 
 | Function | GPIO |
 |---|---|
 | LCD CS / SCK | 14 / 13 |
 | LCD D0–D3 | 15 / 16 / 17 / 18 |
-| LCD RST / Backlight | 21 / 47 |
+| LCD RST / Backlight (PWM) | 21 / 47 |
 | Encoder A / B | 8 / 7 |
 | Knob button | 0 |
-| Touch (CST816) SDA/SCL/INT/RST | 11 / 12 / 9 / 10 *(used for the on-screen controls in Bluetooth mode)* |
+| Touch (CST816) SDA/SCL/INT/RST | 11 / 12 / 9 / 10 |
+| Haptics (DRV2605) | on the CST816 I²C bus (SDA 11 / SCL 12), addr **0x5A** |
+
+> The DRV2605 defaults to the ERM effect library. If your unit has an **LRA**
+> motor, switch to library 6 and set the LRA bit in `FEEDBACK_CTRL` (0x1A) — see
+> the note in `haptics.cpp`. If no DRV2605 answers at 0x5A, haptics degrade to
+> silent (set `DIAG 1` to print an I²C scan at boot).
 
 ## Tuning
 
-All knobs are `#define`s at the top of the sketch:
+`#define`s at the top of `ScrollKnob.ino` (and per-screen constants in the
+`ui_*.cpp` files):
 
 - **Scroll feels backwards?** Set `WHEEL_INVERT` to `true`.
-- **False reverse counts on slow turns?** Raise `REST_QUIET_US` (µs of quiet
-  required before a new count is armed) toward `8000`–`10000`. If fast cranking
-  *drops* clicks, lower it toward `2000`. Default is `5000` (5 ms).
-- **One click moves the counter by more than 1?** Set `PULSES_PER_DETENT` to
-  match. The excursion decoder emits one count per detent, so this is `1`.
-- **Speed bar fills too easily / too slowly?** Change `VEL_FULL_SCALE`
-  (detents-per-second that fills the bar, USB mode).
-- **USB or Bluetooth?** Set `USE_BLE` (`1` = Bluetooth, `0` = USB).
-- **DISCONNECT button times out too fast / slow?** Change `DISCONNECT_PROMPT_MS`
-  (Bluetooth mode, default `10000` = 10 s).
-- **Just want the display test, no USB mouse?** In USB mode set `ENABLE_USB_HID`
-  to `0`.
-- **Debugging?** Set `DIAG` to `1` to add a 4 s boot delay and stream setup
-  progress + live encoder-channel readings over Serial. Leave it `0` for normal
-  use.
-
-## Notes on the design
-
-- The knob is decoded on a **pin-change interrupt**, so counts are never dropped
-  even while the screen is redrawing — no background task or shared-state
-  juggling needed.
-- The display only repaints the parts that change (arrow on direction change,
-  number and bar on each 80 ms tick), so there's no full-screen flicker.
-- HID output and the on-screen numbers are driven from the **same** encoder
-  reading each loop, so the scroll and the display can't drift apart.
+- **False reverse counts on slow turns?** Raise `REST_QUIET_US` toward
+  `8000`–`10000`; if fast cranking drops clicks, lower toward `2000` (default `5000`).
+- **Timer step / max?** `TM_STEP` and `TM_MAX` in `ui_timer.cpp`.
+- **Haptic feel?** The `HAPTIC_FX_*` effect ids in `haptics.h`.
+- **Debugging?** Set `DIAG 1` for a boot delay, an I²C scan, and setup logs.
 
 ## Credits / references
 
 - Panel init sequences: [moononournation/Arduino_GFX](https://github.com/moononournation/Arduino_GFX)
   (`Arduino_ST77916.h`), and [freddy-/st77916-esp32](https://github.com/freddy-/st77916-esp32)
   for confirming the `_150` sequence on the JC3636K518.
+- UI toolkit: [LVGL](https://lvgl.io) 8.4. Fonts: Space Grotesk & JetBrains Mono
+  (via [Fontsource](https://fontsource.org)), converted with
+  [lv_font_conv](https://github.com/lvgl/lv_font_conv).
 - Board hardware notes: [Waveshare wiki](https://www.waveshare.com/wiki/ESP32-S3-Knob-Touch-LCD-1.8),
   [KrX3D/WaveShare-Knob-Esp32S3](https://github.com/KrX3D/WaveShare-Knob-Esp32S3),
-  and [nkinnan/Waveshare-ESP32-S3-Knob-Touch-LCD-1.8_and_Guition-K5-Knob-Series-JC3636K518](https://github.com/nkinnan/Waveshare-ESP32-S3-Knob-Touch-LCD-1.8_and_Guition-K5-Knob-Series-JC3636K518).
+  [nkinnan/Waveshare-ESP32-S3-Knob-Touch-LCD-1.8_and_Guition-K5-Knob-Series-JC3636K518](https://github.com/nkinnan/Waveshare-ESP32-S3-Knob-Touch-LCD-1.8_and_Guition-K5-Knob-Series-JC3636K518).
