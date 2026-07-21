@@ -64,14 +64,11 @@ the tumbler catch. Each tumbler must be approached from a required direction
 direction and **holding the dial still for 3 s** (a ring fills around the number)
 captures it — any movement cancels the hold. **Turn the wrong way and you trip
 the lock**: a red **LOCKOUT** flash + alarm buzz, and the whole game resets to the
-first tumbler (the combination stays the same). A **countdown ring drains around
-the rim** — beat the clock before the guard is back, with the final seconds
-ticking audibly; run out and it's **OUT OF TIME**. Five captures → **SAFE OPEN**.
+first tumbler (the combination stays the same). Five captures → **SAFE OPEN**.
 Five dots track progress. Tap **NEW** (top-left) — or tap the centre once
-open/busted — to start a fresh game; **MENU** returns to the launcher. The combo
+open — to start a fresh game; **MENU** returns to the launcher. The combo
 can be printed to Serial with `GAME_DEBUG 1`; flip `GAME_INVERT_DIR` if clockwise
-feels reversed; set `GAME_TIMER 0` to disable the clock or tune `GAME_TIMER_MS`
-(all in `ui_game.cpp`).
+feels reversed (all in `ui_game.cpp`).
 
 ### Settings
 A focusable list: **Brightness** (tap to edit, then rotate ±5 % — drives the
