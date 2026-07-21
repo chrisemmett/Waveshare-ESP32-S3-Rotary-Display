@@ -1,6 +1,7 @@
 // Safe Cracker game. Rotate the dial to hunt for each tumbler; the waveform +
 // status strengthen near the target. Arrive from the required direction and hold
-// still for 3 s to capture it. Five tumblers -> SAFE OPEN. Touch: NEW starts a
+// still for 3 s to capture it. Turning the wrong way resets the whole game (the
+// combination stays the same). Five tumblers -> SAFE OPEN. Touch: NEW starts a
 // fresh game, MENU returns to the launcher (this knob has no press).
 #include "ui_internal.h"
 #include <Arduino.h>
@@ -170,8 +171,8 @@ static void capture(void) {
   }
 }
 
-static void newGame(void) {
-  for (int i = 0; i < N_TUMBLERS; i++) s_secret[i] = appRandom() % DIAL_N;
+// Reset progress back to the first tumbler, keeping the current combination.
+static void resetProgress(void) {
   s_tumbler = 0;
   s_pos = 0;
   s_lastDir = 0;
@@ -179,6 +180,18 @@ static void newGame(void) {
   s_flashUntil = 0;
   cancelHold();
   lv_obj_add_flag(s_openHit, LV_OBJ_FLAG_HIDDEN);
+}
+
+// Turning the wrong way blows the lock: reset progress but keep the combination.
+static void wrongDirReset(void) {
+  appHapticAlarm();
+  resetProgress();
+  redraw();
+}
+
+static void newGame(void) {
+  for (int i = 0; i < N_TUMBLERS; i++) s_secret[i] = appRandom() % DIAL_N;
+  resetProgress();
 #if GAME_DEBUG
   Serial.printf("Safe combo: %d %d %d %d %d\n", s_secret[0], s_secret[1],
                 s_secret[2], s_secret[3], s_secret[4]);
@@ -301,6 +314,7 @@ void game_show(void) {
 void game_encoder(int rawDir) {
   if (!s_built || s_open) return;
   int mv = GAME_INVERT_DIR ? -rawDir : rawDir;
+  if (mv != 0 && !dirCorrect(mv)) { wrongDirReset(); return; }  // wrong way -> reset
   s_pos = (s_pos + mv + DIAL_N) % DIAL_N;
   s_lastDir = mv;
   cancelHold();  // any movement cancels a hold

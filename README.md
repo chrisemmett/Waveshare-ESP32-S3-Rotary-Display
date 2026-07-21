@@ -60,8 +60,9 @@ tumbler; a **listening waveform** and status label (`QUIET` → `GETTING WARMER`
 `VERY STRONG`) strengthen as you near the target. Each tumbler must be approached
 from a required direction (alternating CW/ACW, shown by the arrow up top);
 arriving from the correct direction and **holding the dial still for 3 s** (a ring
-fills around the number) captures it — any movement cancels the hold. Five
-captures → **SAFE OPEN**. Five dots track progress. Tap **NEW** (top-left) — or
+fills around the number) captures it — any movement cancels the hold. **Turn the
+wrong way and the whole game resets** back to the first tumbler (the combination
+stays the same). Five captures → **SAFE OPEN**. Five dots track progress. Tap **NEW** (top-left) — or
 tap the centre once open — to start a fresh game; **MENU** returns to the
 launcher. The combo can be printed to Serial with `GAME_DEBUG 1`; flip
 `GAME_INVERT_DIR` if clockwise feels reversed (both in `ui_game.cpp`).
