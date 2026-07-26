@@ -442,6 +442,11 @@ void appBlit(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *px) {
 void *appDmaAlloc(uint32_t bytes) {
   return heap_caps_malloc(bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
 }
+void *appBulkAlloc(uint32_t bytes) {
+  void *p = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (p == nullptr) p = heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  return p;
+}
 void appKeepAwake(void) { screenNoteActivity(); }
 
 // ============================ LVGL display + input ============================
