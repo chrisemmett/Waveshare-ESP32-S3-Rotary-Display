@@ -1,4 +1,4 @@
-# rotary-display
+# Waveshare-ESP32-S3-Rotary-Display
 
 Turn a **Waveshare ESP32-S3-Knob-Touch-LCD-1.8** into a polished, **multi-function
 knob** — a radial-arc launcher on its 360×360 round display with five apps:
