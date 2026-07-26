@@ -333,6 +333,16 @@ per detent.
 - **Haptic feel?** The `HAPTIC_FX_*` effect ids in `haptics.h`.
 - **Debugging?** Set `DIAG 1` for a boot delay, an I²C scan, and setup logs.
 
+## License
+
+MIT — see [LICENSE](LICENSE). Do what you like with it; keep the copyright
+notice.
+
+One exception: the committed LVGL fonts under `ScrollKnob/src/` are glyph data
+rasterised from Space Grotesk and JetBrains Mono, which stay under the SIL Open
+Font License 1.1. That only means their notice travels with them — see
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
 ## Credits / references
 
 - Panel init sequences: [moononournation/Arduino_GFX](https://github.com/moononournation/Arduino_GFX)
