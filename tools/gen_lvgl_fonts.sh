@@ -32,6 +32,12 @@ gen() { # font size range outname
   echo "  wrote $4.c"
 }
 
+gensym() { # font size symbols outname - only the glyphs in the literal string
+  "$BIN" --font "$1" --size "$2" --bpp 4 --format lvgl --symbols "$3" \
+         --no-compress --force-fast-kern-format -o "$OUT/$4.c"
+  echo "  wrote $4.c"
+}
+
 mkdir -p "$OUT"
 echo "Generating LVGL fonts into $OUT ..."
 gen "$SG/space-grotesk-latin-600-normal.woff"   23 "$ASCII"     font_sg_23
@@ -41,4 +47,7 @@ gen "$JBM/jetbrains-mono-latin-400-normal.woff" 10 "$ASCII"     font_jbm_10
 gen "$JBM/jetbrains-mono-latin-500-normal.woff" 11 "$ASCII"     font_jbm_11
 gen "$JBM/jetbrains-mono-latin-400-normal.woff" 12 "$ASCII"     font_jbm_12
 gen "$JBM/jetbrains-mono-latin-700-normal.woff" 52 "0x30-0x3A"  font_jbm_52
+# Timer finale only ever draws one string, so carry only its glyphs (~21 KB of
+# flash instead of ~180 KB for all of ASCII at this size).
+gensym "$SG/space-grotesk-latin-600-normal.woff" 46 "TIME'S UP" font_sg_46
 echo "Done."
