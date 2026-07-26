@@ -26,6 +26,7 @@
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
 #include <Wire.h>
+#include <Preferences.h>   // NVS-backed settings (brightness, haptics, ...)
 #include <esp_random.h>     // esp_random() for the Safe Cracker combo generator
 #include <esp_heap_caps.h>  // DMA-capable alloc for the FPS blit buffer
 
@@ -125,11 +126,19 @@ static const uint8_t HID_REPORT_MAP[] = {
   0xC0, 0xC0
 };
 
+#define BLE_DEVICE_NAME "ScrollKnob"
+
 static NimBLEServer *bleServer = nullptr;
 static NimBLEHIDDevice *bleHid = nullptr;
 static NimBLECharacteristic *bleInput = nullptr;
 volatile bool g_connected = false;
 volatile uint16_t g_connHandle = 0;
+
+// Main-task state. The NimBLE callbacks only ever set the two volatiles above;
+// everything else (advertising, the cached peer address) is touched from loop()
+// so start/stop can't race the host task.
+static bool g_discoverable = true;
+static char g_peerAddr[APP_BT_ADDR_LEN] = "";
 
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo) override {
@@ -138,16 +147,44 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   }
   void onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo, int reason) override {
     g_connected = false;
-    NimBLEDevice::startAdvertising();
+    // Deliberately NOT restarting advertising here - loop() does it on the
+    // connection edge, and only if the user left us discoverable.
   }
 };
 
+// Advertising is a derived state: broadcast only while the user wants to be
+// discoverable AND nothing is connected. Re-applied on every connection edge
+// and whenever the toggle moves; start()/stop() are both no-ops when the
+// controller is already in the requested state.
+static void bleApplyAdvertising() {
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  if (g_discoverable && !g_connected) adv->start();
+  else adv->stop();
+}
+
+// Cache the connected host's address for the UI. Read on the connection edge
+// rather than per frame - it can't change while a link is up.
+static void blePeerRefresh() {
+  g_peerAddr[0] = '\0';
+  if (!g_connected || bleServer == nullptr || bleServer->getConnectedCount() == 0) return;
+  NimBLEConnInfo ci = bleServer->getPeerInfoByHandle(g_connHandle);
+  // The identity address is what shows up in the bond list, so prefer it; it is
+  // all zeroes until the peer is resolved, and then the (possibly random)
+  // connection address is the only thing we can name it by.
+  std::string s = ci.getIdAddress().toString();
+  if (s.empty() || s == "00:00:00:00:00:00") s = ci.getAddress().toString();
+  snprintf(g_peerAddr, sizeof(g_peerAddr), "%s", s.c_str());
+}
+
 static void bleSetup() {
-  NimBLEDevice::init("ScrollKnob");
+  NimBLEDevice::init(BLE_DEVICE_NAME);
   NimBLEDevice::setSecurityAuth(true, false, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
   bleServer = NimBLEDevice::createServer();
   bleServer->setCallbacks(new ServerCallbacks());
+  // We own the advertising lifecycle (see bleApplyAdvertising), so the server
+  // must not quietly restart it behind the Discoverable toggle's back.
+  bleServer->advertiseOnDisconnect(false);
   bleHid = new NimBLEHIDDevice(bleServer);
   bleInput = bleHid->getInputReport(1);
   bleHid->setManufacturer("DIY");
@@ -160,7 +197,7 @@ static void bleSetup() {
   adv->setAppearance(0x03C2);
   adv->addServiceUUID(bleHid->getHidService()->getUUID());
   adv->enableScanResponse(true);
-  NimBLEDevice::startAdvertising();
+  bleApplyAdvertising();
 }
 
 // ============================ Touch (CST816) ============================
@@ -269,6 +306,57 @@ static void screenIdleTick(uint32_t now) {
 static bool g_hapticsOn = true;
 static bool g_hapticsPresent = false;
 
+// ============================ Settings persistence (NVS) ============================
+// Every user-facing setting lives in one NVS namespace, written back as a set.
+//
+// Writes are DEFERRED, not immediate - and the reason is stalls, not flash
+// wear. NVS is log-structured: a changed value appends one 32-byte entry, and
+// only when a page fills (126 entries per 4 KB sector) does compaction erase a
+// sector, so endurance sits in the millions of changes and was never the
+// binding constraint. What does bite is that every flash write disables the
+// instruction cache on both cores, and the compaction landing every ~126
+// changes carries a sector erase measured in tens of milliseconds. Saving on
+// each detent would drop that hitch into the middle of the one gesture that has
+// to feel smooth.
+//
+// So a change only marks the block dirty; prefsTick() flushes once nothing has
+// moved for PREFS_FLUSH_MS - long enough to collapse a dial sweep into a single
+// write (detents land far closer together than this), short enough that pulling
+// the power right after a change rarely loses it. NVS compares before writing
+// and skips a value that already matches, so flushing all four keys together
+// costs a read, not a write, for the three that didn't move. The defaults above
+// (80 %, haptics on, always-on off, discoverable) are what a first boot - or a
+// wiped NVS - falls back to.
+#define PREFS_NS "scrollknob"
+#define PREFS_FLUSH_MS 400
+
+static Preferences g_prefs;
+static bool g_prefsDirty = false;
+static uint32_t g_prefsDirtyMs = 0;
+
+static void prefsLoad() {
+  g_prefs.begin(PREFS_NS, false);  // read-write, stays open for the session
+  uint8_t b = g_prefs.getUChar("bright", g_brightness);
+  g_brightness = (b > 100) ? 100 : b;
+  g_hapticsOn    = g_prefs.getBool("haptics", g_hapticsOn);
+  g_alwaysOn     = g_prefs.getBool("alwayson", g_alwaysOn);
+  g_discoverable = g_prefs.getBool("btdisc", g_discoverable);
+}
+
+static void prefsTouch() {
+  g_prefsDirty = true;
+  g_prefsDirtyMs = millis();
+}
+
+static void prefsTick(uint32_t now) {
+  if (!g_prefsDirty || (uint32_t)(now - g_prefsDirtyMs) < PREFS_FLUSH_MS) return;
+  g_prefsDirty = false;
+  g_prefs.putUChar("bright", g_brightness);
+  g_prefs.putBool("haptics", g_hapticsOn);
+  g_prefs.putBool("alwayson", g_alwaysOn);
+  g_prefs.putBool("btdisc", g_discoverable);
+}
+
 // ============================ app.h implementation ============================
 void appEmitWheel(int8_t ticks) {
   if (!g_connected || bleInput == nullptr || ticks == 0) return;
@@ -277,24 +365,71 @@ void appEmitWheel(int8_t ticks) {
   bleInput->setValue(report, sizeof(report));
   bleInput->notify();
 }
-void appForgetBonds(void) {
-  NimBLEDevice::deleteAllBonds();
-  if (g_connected) bleServer->disconnect(g_connHandle);
-}
 bool appConnected(void) { return g_connected; }
+const char *appBtName(void) { return BLE_DEVICE_NAME; }
+
+void appBtDisconnect(void) {
+  if (g_connected && bleServer != nullptr) bleServer->disconnect(g_connHandle);
+}
+void appBtSetDiscoverable(bool on) {
+  g_discoverable = on;
+  bleApplyAdvertising();
+  prefsTouch();
+}
+bool appBtDiscoverable(void) { return g_discoverable; }
+bool appBtAdvertising(void) { return NimBLEDevice::getAdvertising()->isAdvertising(); }
+
+void appBtPeerAddr(char *out, uint32_t len) {
+  if (out == nullptr || len == 0) return;
+  snprintf(out, len, "%s", g_connected ? g_peerAddr : "");
+}
+
+uint8_t appBtBondCount(void) {
+  int n = NimBLEDevice::getNumBonds();
+  if (n < 0) n = 0;
+  if (n > APP_BT_MAX_BONDS) n = APP_BT_MAX_BONDS;
+  return (uint8_t)n;
+}
+bool appBtBondAddr(uint8_t idx, char *out, uint32_t len) {
+  if (out == nullptr || len == 0) return false;
+  out[0] = '\0';
+  if (idx >= appBtBondCount()) return false;
+  snprintf(out, len, "%s", NimBLEDevice::getBondedAddress(idx).toString().c_str());
+  return true;
+}
+bool appBtBondIsConnected(uint8_t idx) {
+  char addr[APP_BT_ADDR_LEN];
+  if (!g_connected || !appBtBondAddr(idx, addr, sizeof(addr))) return false;
+  return strcmp(addr, g_peerAddr) == 0;
+}
+void appBtForgetBond(uint8_t idx) {
+  if (idx >= appBtBondCount()) return;
+  // Order matters: read the address first (deleting shifts the list), and drop
+  // the link before the bond goes, or the host reconnects on the old keys.
+  bool linked = appBtBondIsConnected(idx);
+  NimBLEAddress a = NimBLEDevice::getBondedAddress(idx);
+  if (linked) appBtDisconnect();
+  NimBLEDevice::deleteBond(a);
+}
+void appBtForgetAll(void) {
+  appBtDisconnect();
+  NimBLEDevice::deleteAllBonds();
+}
 void appSetBrightness(uint8_t pct) {
   g_brightness = pct;
   // Don't fight the blank: while asleep the new level is applied on wake.
   if (!g_screenBlank) backlightWrite(pct);
+  prefsTouch();
 }
 uint8_t appGetBrightness(void) { return g_brightness; }
 void appSetAlwaysOn(bool on) {
   g_alwaysOn = on;
   screenWake();  // on: light it and keep it lit / off: start a fresh countdown
+  prefsTouch();
 }
 bool appAlwaysOn(void) { return g_alwaysOn; }
 void appWakeScreen(void) { screenWake(); }
-void appSetHaptics(bool on) { g_hapticsOn = on; }
+void appSetHaptics(bool on) { g_hapticsOn = on; prefsTouch(); }
 bool appHapticsEnabled(void) { return g_hapticsOn; }
 void appHapticTick(void)  { if (g_hapticsOn && g_hapticsPresent) hapticsPlay(HAPTIC_FX_TICK); }
 void appHapticPress(void) { if (g_hapticsOn && g_hapticsPresent) hapticsPlay(HAPTIC_FX_PRESS); }
@@ -417,6 +552,10 @@ void setup() {
   delay(600);  // let USB-CDC re-attach so early logs aren't lost
   Serial.println("\n=== ScrollKnob (LVGL) setup ===");
 
+  // Settings first: the backlight, the haptics gate and the BLE advertising
+  // state below all start from whatever was saved.
+  prefsLoad();
+
   // Encoder
   pinMode(ENC_A_PIN, INPUT_PULLUP);
   pinMode(ENC_B_PIN, INPUT_PULLUP);
@@ -487,17 +626,24 @@ void loop() {
     }
   }
 
-  // BLE connection edges
+  // BLE connection edges. Everything that has to touch the stack from the main
+  // task hangs off this: caching the peer address, and resuming advertising
+  // after a drop (the ServerCallbacks deliberately don't).
   static bool prevConn = false;
   bool conn = g_connected;
   if (conn != prevConn) {
-    uiConnChanged(conn);
     prevConn = conn;
+    blePeerRefresh();
+    bleApplyAdvertising();
+    uiConnChanged(conn);
   }
 
   // Blank the panel after SCREEN_TIMEOUT_MS of no dial/touch input (unless
   // Always-On is set).
   screenIdleTick(now);
+
+  // Write any changed settings back to NVS once they have settled.
+  prefsTick(now);
 
   // LVGL render, then per-frame UI logic. The order matters: the FPS screen
   // blits its viewport straight to the panel from uiTick(), so LVGL has to have

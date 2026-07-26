@@ -16,6 +16,7 @@ void navGo(ScreenId id) {
     case SCR_SETTINGS: settings_show(); break;
     case SCR_GAME:     game_show();     break;
     case SCR_FPS:      fps_show();      break;
+    case SCR_BT:       bt_show();       break;
   }
 }
 
@@ -32,6 +33,7 @@ void uiEncoder(int32_t dir) {
     case SCR_SETTINGS: settings_encoder(dir); break;
     case SCR_GAME:     game_encoder(dir);     break;
     case SCR_FPS:      fps_encoder(dir);      break;
+    case SCR_BT:       bt_encoder(dir);       break;
   }
 }
 
@@ -41,11 +43,14 @@ void uiPress(void) {
     case SCR_SCROLL:   scroll_press();   break;
     case SCR_TIMER:    timer_press();    break;
     case SCR_SETTINGS: settings_press(); break;
+    case SCR_BT:       bt_press();       break;
+    default: break;
   }
 }
 
 void uiBack(void) {
-  if (s_cur != SCR_LAUNCHER) navGo(SCR_LAUNCHER);
+  if (s_cur == SCR_BT) navGo(SCR_SETTINGS);       // nested one level down
+  else if (s_cur != SCR_LAUNCHER) navGo(SCR_LAUNCHER);
 }
 
 void uiTick(void) {
@@ -53,11 +58,13 @@ void uiTick(void) {
   else if (s_cur == SCR_TIMER) timer_tick();
   else if (s_cur == SCR_GAME) game_tick();
   else if (s_cur == SCR_FPS) fps_tick();
+  else if (s_cur == SCR_BT) bt_tick();
 }
 
 void uiConnChanged(bool connected) {
   (void)connected;
   if (s_cur == SCR_SETTINGS) settings_conn_changed();
+  else if (s_cur == SCR_BT) bt_conn_changed();
 }
 
 // ============================ Shared helpers ============================
@@ -119,12 +126,15 @@ lv_obj_t *make_marker(lv_obj_t *parent) {
 
 // MENU back affordance: a small down chevron + "MENU" label, tappable.
 static void back_click_cb(lv_event_t *e) {
-  (void)e;
   appHapticPress();
-  navGo(SCR_LAUNCHER);
+  navGo((ScreenId)(intptr_t)lv_event_get_user_data(e));
 }
 
 lv_obj_t *make_back_chevron(lv_obj_t *parent) {
+  return make_back_chevron_to(parent, SCR_LAUNCHER, "MENU");
+}
+
+lv_obj_t *make_back_chevron_to(lv_obj_t *parent, ScreenId dest, const char *label) {
   lv_obj_t *box = lv_obj_create(parent);
   lv_obj_remove_style_all(box);
   lv_obj_set_size(box, 110, 48);
@@ -136,10 +146,10 @@ lv_obj_t *make_back_chevron(lv_obj_t *parent) {
   lv_obj_t *tri = make_triangle(box, 14, 7, true, COL_FAINT2);
   lv_obj_align(tri, LV_ALIGN_CENTER, 0, -9);
 
-  lv_obj_t *lbl = make_label(box, "MENU", &font_jbm_10, COL_FAINT2);
+  lv_obj_t *lbl = make_label(box, label, &font_jbm_10, COL_FAINT2);
   lv_obj_set_style_text_letter_space(lbl, 2, 0);
   lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 6);
 
-  lv_obj_add_event_cb(box, back_click_cb, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(box, back_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)dest);
   return box;
 }

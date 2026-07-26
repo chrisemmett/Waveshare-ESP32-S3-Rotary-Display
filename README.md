@@ -7,7 +7,8 @@ knob** — a radial-arc launcher on its 360×360 round display with five apps:
 - **Countdown** — a timer with a depleting progress ring and a flashing-green alarm.
 - **Safe Cracker** — crack a 5-tumbler combination by feel.
 - **Dial of Doom** — a textured-raycaster FPS played entirely on the dial.
-- **Settings** — brightness, haptics, and Bluetooth disconnect.
+- **Settings** — brightness, haptics, screen sleep, and full Bluetooth control
+  (discoverability, disconnect, and the paired-device list).
 
 The UI is built with **LVGL 8.4** (real fonts, anti-aliased arcs, animated ring
 transitions), driven by the knob's rotary encoder + push button, the CST816
@@ -34,7 +35,7 @@ This knob has **no shaft press** — the UI is driven by **rotate + touch**.
 |---|---|
 | **Rotate** | Move focus / adjust the active value. One detent fires a short haptic. |
 | **Tap** | Activate — open the focused app (tap the centre or its icon), start/pause the timer (tap the centre), toggle the scroll mode pill, start or retry Dial of Doom, or activate a settings row. Fires a confirm haptic. |
-| **Tap MENU** | The chevron at bottom-centre returns to the launcher from any app. |
+| **Tap MENU** | The chevron at bottom-centre returns to the launcher from any app. On a nested screen it reads **BACK** and returns one level up (Bluetooth → Settings). |
 
 ## The apps
 
@@ -48,7 +49,8 @@ OPEN"` meta line. Rotate to change focus; tap the centre (or the focused item) t
 Rotating emits BLE HID wheel events to a paired host. A viewport scrolls with the
 knob and the active-direction chevron highlights (fading ~480 ms after the last
 tick). **Tapping the mode pill toggles LINE / PAGE** (PAGE sends a larger delta); a running
-tick counter shows in the mode pill. Scrolling only reaches a host once paired.
+tick counter shows in the mode pill. Scrolling only reaches a host once paired —
+see [Bluetooth](#bluetooth) for pairing, disconnecting, and the bond list.
 
 ### Countdown
 A full-bleed progress ring (idle grey / running amber) around a big `MM:SS`
@@ -126,8 +128,54 @@ Every row is clipped to the display circle, so the corners are never filled.
 ### Settings
 A focusable list: **Brightness** (tap to edit, then rotate ±5 % — drives the
 backlight PWM live, with a progress bar), **Haptics** (ON/OFF, gates all haptic
-feedback), **Bluetooth** (`DISCONNECT` — forgets every bond and drops the link),
-and **Always-On** (`ON`/`OFF` — see below).
+feedback), **Bluetooth** (live link state — `CONNECTED` / `FINDABLE` / `OFF`;
+opens the Bluetooth screen), and **Always-On** (`ON`/`OFF` — see below).
+
+Every setting is **saved to NVS and restored at boot** — brightness, haptics,
+Always-On, and Discoverable.
+
+Writes are **deferred rather than immediate, to avoid stalls rather than flash
+wear**. NVS is log-structured: a changed value appends one 32-byte entry and
+only erases a sector when a page fills (126 entries per 4 KB sector), which puts
+endurance in the millions of changes — not a real constraint here. The cost that
+does bite is that every flash write disables the instruction cache on *both*
+cores, and the compaction landing every ~126 changes carries a sector erase
+measured in tens of milliseconds. Brightness moves 5 % per detent, so saving on
+change would drop that hitch into the middle of the one gesture that has to feel
+smooth.
+
+So a change marks the block dirty and it is flushed once nothing has moved for
+~400 ms — long enough to collapse a dial sweep into a single write, short enough
+that pulling the power right after a change rarely loses it, which is the one
+real cost of deferring. First boot (or a wiped NVS) falls back to 80 %, haptics
+on, Always-On off, discoverable.
+
+### Bluetooth
+A control panel for the BLE link, one level under Settings. The advertised name
+(`ScrollKnob`) sits under the header so it can be matched against the host's
+Bluetooth picker, over a scrolling list:
+
+- **Discoverable** (`ON`/`OFF`) — whether we advertise. This is the only way a
+  new host can find the knob *and* the only way a bonded one can reconnect, so
+  `OFF` means nothing can link until it goes back on. The sub-line reports what
+  is actually happening on air: `broadcasting now`, `paused while connected`
+  (advertising stops by itself while a host holds the link — nothing else could
+  connect anyway — and resumes when it drops), or `hidden - no host can link`.
+- **Connection** — the connected host's address, and `DISCONNECT` to drop the
+  link. The bond survives, so the host is free to reconnect; this is "hand the
+  wheel to another machine", not "forget it". With no host it is a status row
+  (`waiting for a host` / `not advertising`) and the focus skips over it.
+- **One row per paired device** — the bond's address, marked `LINKED` if it is
+  the live one and `PAIRED` otherwise. Pressing it forgets that bond alone.
+- **Forget all** — appears once there are two or more bonds.
+
+Both forget actions are **two-press**: the first arms the row (`FORGET?` /
+`CONFIRM?` in red, "press again"), a second press within 2.6 s does it, and
+rotating away or waiting it out cancels. There is no keyboard here, and a stray
+detent shouldn't be one press away from unpairing a laptop.
+
+The bond list is NimBLE's own store, so it survives reboots (and so does a
+forget), and Discoverable is saved with the other settings.
 
 ### Screen sleep
 With **Always-On `OFF`** (the default) the backlight switches off after **10 s**
@@ -143,8 +191,9 @@ finishes while it is asleep is still seen — and stays seen.
 
 With **Always-On `ON`** the screen never blanks (and lights up immediately if it
 was already asleep). Switching it back off starts a fresh 10 s countdown. The
-timeout is `SCREEN_TIMEOUT_MS` in `ScrollKnob.ino`; neither this nor any other
-setting is persisted across a reboot yet.
+timeout itself is a compile-time constant (`SCREEN_TIMEOUT_MS` in
+`ScrollKnob.ino`), but the Always-On choice is saved with the rest of the
+settings.
 
 ## Code layout
 
@@ -155,7 +204,7 @@ Everything is in [`ScrollKnob/`](ScrollKnob):
   display/touch driver + input dispatch. Exposes hardware services via `app.h`
   and forwards input to the UI via `ui.h`.
 - `ui.cpp` + `ui_launcher.cpp` / `ui_scroll.cpp` / `ui_timer.cpp` /
-  `ui_settings.cpp` / `ui_game.cpp` / `ui_fps.cpp` — the LVGL screens (see
+  `ui_settings.cpp` / `ui_bt.cpp` / `ui_game.cpp` / `ui_fps.cpp` — the LVGL screens (see
   `ui_internal.h` for shared tokens). `ui_fps.cpp` is the odd one out: it owns a
   raycaster that writes RGB565 bands and hands them to `appBlit()` rather than
   drawing through LVGL (see [Dial of Doom](#dial-of-doom)).
@@ -181,7 +230,8 @@ mirrors the raw CST816 coordinates so taps line up after a flip.
 | **NimBLE-Arduino** (2.x) | h2zero | BLE HID mouse (the Scroll app) |
 
 Install "esp32 by Espressif Systems" via the Boards Manager if you haven't. No
-encoder or touch library is needed — both are driven inline.
+encoder or touch library is needed — both are driven inline, and `Preferences`
+(the NVS-backed settings store) ships with the ESP32 core.
 
 ### 2. LVGL configuration (no `lv_conf.h` to place)
 
