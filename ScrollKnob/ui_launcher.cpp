@@ -7,13 +7,14 @@
 #define DEG2RAD 0.017453292519943295
 #define RING_R 128
 #define ITEM_SZ 58
-#define APP_N 4
+#define APP_N 5
 
 struct AppDef { const char *name; const char *desc; ScreenId screen; };
 static const AppDef APPS[APP_N] = {
   { "Scroll Wheel", "Laptop scroll over BLE HID", SCR_SCROLL },
   { "Countdown",    "Timer with haptic alarm",    SCR_TIMER  },
   { "Safe Cracker", "Crack the combo by ear",     SCR_GAME   },
+  { "Dial of Doom", "One-dial FPS. Turn to aim",  SCR_FPS    },
   { "Settings",     "Display, haptics, network",  SCR_SETTINGS },
 };
 
@@ -53,6 +54,15 @@ static void hline(lv_obj_t *p, int x, int y, int w, uint32_t col) {
   lv_obj_set_style_radius(o, 1, 0);
   lv_obj_align(o, LV_ALIGN_TOP_LEFT, x, y);
 }
+static void vline(lv_obj_t *p, int x, int y, int h, uint32_t col) {
+  lv_obj_t *o = lv_obj_create(p);
+  lv_obj_remove_style_all(o);
+  lv_obj_set_size(o, 2, h);
+  lv_obj_set_style_bg_color(o, lv_color_hex(col), 0);
+  lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(o, 1, 0);
+  lv_obj_align(o, LV_ALIGN_TOP_LEFT, x, y);
+}
 static void dot(lv_obj_t *p, int x, int y, int d, uint32_t col) {
   lv_obj_t *o = lv_obj_create(p);
   lv_obj_remove_style_all(o);
@@ -63,7 +73,8 @@ static void dot(lv_obj_t *p, int x, int y, int d, uint32_t col) {
   lv_obj_align(o, LV_ALIGN_TOP_LEFT, x, y);
 }
 
-// appIdx: 0 mouse, 1 stopwatch, 2 sliders. Drawn in `col`, fitted to `sz`.
+// appIdx: 0 mouse, 1 stopwatch, 2 safe, 3 crosshair, 4 sliders. Index matches the
+// APPS row. Drawn in `col`, fitted to `sz`.
 static lv_obj_t *make_app_icon(lv_obj_t *parent, int appIdx, int sz, uint32_t col) {
   lv_obj_t *c = iconContainer(parent, sz);
   if (appIdx == 0) {  // mouse: body + wheel
@@ -104,6 +115,16 @@ static lv_obj_t *make_app_icon(lv_obj_t *parent, int appIdx, int sz, uint32_t co
     lv_obj_set_style_bg_opa(handle, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(handle, 1, 0);
     lv_obj_align(handle, LV_ALIGN_CENTER, sz * 22 / 100, 0);
+  } else if (appIdx == 3) {  // crosshair: reticle ring + four ticks + pip
+    lv_obj_t *ring = strokeRect(c, sz * 7 / 10, sz * 7 / 10, LV_RADIUS_CIRCLE, col);
+    lv_obj_center(ring);
+    int t = sz * 18 / 100;                 // tick length
+    int m = sz / 2 - 1;                    // centre line offset (2px strokes)
+    vline(c, m, 0, t, col);
+    vline(c, m, sz - t, t, col);
+    hline(c, 0, m, t, col);
+    hline(c, sz - t, m, t, col);
+    dot(c, m - 1, m - 1, 4, col);
   } else {  // sliders: three lines with knobs
     int y0 = sz * 22 / 100, gap = sz * 28 / 100, w = sz * 8 / 10, x0 = sz / 10;
     hline(c, x0, y0, w, col);            dot(c, x0 + w * 6 / 10, y0 - 2, 6, col);

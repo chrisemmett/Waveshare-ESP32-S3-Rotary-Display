@@ -26,7 +26,8 @@
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
 #include <Wire.h>
-#include <esp_random.h>  // esp_random() for the Safe Cracker combo generator
+#include <esp_random.h>     // esp_random() for the Safe Cracker combo generator
+#include <esp_heap_caps.h>  // DMA-capable alloc for the FPS blit buffer
 
 #include "app.h"
 #include "ui.h"
@@ -300,6 +301,14 @@ void appHapticPress(void) { if (g_hapticsOn && g_hapticsPresent) hapticsPlay(HAP
 void appHapticAlarm(void) { if (g_hapticsOn && g_hapticsPresent) hapticsPlay(HAPTIC_FX_ALARM); }
 uint32_t appRandom(void)  { return esp_random(); }
 
+void appBlit(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *px) {
+  gfx->draw16bitBeRGBBitmap(x, y, (uint16_t *)px, w, h);
+}
+void *appDmaAlloc(uint32_t bytes) {
+  return heap_caps_malloc(bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+}
+void appKeepAwake(void) { screenNoteActivity(); }
+
 // ============================ LVGL display + input ============================
 #define LV_BUF_LINES 40
 static lv_disp_draw_buf_t lv_draw_buf;
@@ -490,9 +499,14 @@ void loop() {
   // Always-On is set).
   screenIdleTick(now);
 
-  // UI per-frame logic + LVGL render
-  uiTick();
+  // LVGL render, then per-frame UI logic. The order matters: the FPS screen
+  // blits its viewport straight to the panel from uiTick(), so LVGL has to have
+  // finished painting for the frame before that happens - otherwise a tap (which
+  // invalidates the transparent hit target) would repaint background over the
+  // freshly drawn 3D view. Other screens only touch LVGL objects here, so
+  // running after the render just defers them by one loop.
   lv_timer_handler();
+  uiTick();
 
   delay(3);
 }

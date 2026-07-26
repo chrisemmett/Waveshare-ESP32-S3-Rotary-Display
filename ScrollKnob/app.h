@@ -45,6 +45,21 @@ void appHapticAlarm(void);  // long buzz at timer end
 // Hardware RNG (esp_random) - used by the Safe Cracker combo generator.
 uint32_t appRandom(void);
 
+// ---- Direct-to-panel rendering (Dial of Doom) ----
+// The raycaster renders its own framebuffer bands and pushes them straight at
+// the panel; going through LVGL would mean an extra full-screen copy per frame.
+// `px` is RGB565 in the panel's byte order (big-endian) - the same format
+// LVGL's flush callback hands over on this board.
+void appBlit(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *px);
+
+// DMA-capable internal-RAM allocation, for buffers handed to appBlit(). Returns
+// NULL if the request can't be satisfied.
+void *appDmaAlloc(uint32_t bytes);
+
+// Reset the idle-blank countdown. For screens that animate without input and
+// must not blank mid-frame (the FPS runs itself; only the dial is an input).
+void appKeepAwake(void);
+
 #ifdef __cplusplus
 }
 #endif
