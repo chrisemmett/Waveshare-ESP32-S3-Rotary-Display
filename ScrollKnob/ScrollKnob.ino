@@ -26,6 +26,7 @@
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
 #include <Wire.h>
+#include <Preferences.h>   // NVS-backed settings (brightness, haptics, ...)
 #include <esp_random.h>     // esp_random() for the Safe Cracker combo generator
 #include <esp_heap_caps.h>  // DMA-capable alloc for the FPS blit buffer
 
@@ -305,6 +306,46 @@ static void screenIdleTick(uint32_t now) {
 static bool g_hapticsOn = true;
 static bool g_hapticsPresent = false;
 
+// ============================ Settings persistence (NVS) ============================
+// Every user-facing setting lives in one NVS namespace, written back as a set.
+//
+// Writes are DEFERRED, not immediate: brightness moves 5 % per detent, so
+// saving on change would put a flash write on every click of the dial. A change
+// only marks the block dirty; prefsTick() flushes once the dial has been still
+// for PREFS_FLUSH_MS. NVS skips a write when the stored value already matches,
+// so flushing all four keys together costs nothing for the ones that didn't
+// move. The defaults above (80 %, haptics on, always-on off, discoverable) are
+// what a first boot - or a wiped NVS - falls back to.
+#define PREFS_NS "scrollknob"
+#define PREFS_FLUSH_MS 1200
+
+static Preferences g_prefs;
+static bool g_prefsDirty = false;
+static uint32_t g_prefsDirtyMs = 0;
+
+static void prefsLoad() {
+  g_prefs.begin(PREFS_NS, false);  // read-write, stays open for the session
+  uint8_t b = g_prefs.getUChar("bright", g_brightness);
+  g_brightness = (b > 100) ? 100 : b;
+  g_hapticsOn    = g_prefs.getBool("haptics", g_hapticsOn);
+  g_alwaysOn     = g_prefs.getBool("alwayson", g_alwaysOn);
+  g_discoverable = g_prefs.getBool("btdisc", g_discoverable);
+}
+
+static void prefsTouch() {
+  g_prefsDirty = true;
+  g_prefsDirtyMs = millis();
+}
+
+static void prefsTick(uint32_t now) {
+  if (!g_prefsDirty || (uint32_t)(now - g_prefsDirtyMs) < PREFS_FLUSH_MS) return;
+  g_prefsDirty = false;
+  g_prefs.putUChar("bright", g_brightness);
+  g_prefs.putBool("haptics", g_hapticsOn);
+  g_prefs.putBool("alwayson", g_alwaysOn);
+  g_prefs.putBool("btdisc", g_discoverable);
+}
+
 // ============================ app.h implementation ============================
 void appEmitWheel(int8_t ticks) {
   if (!g_connected || bleInput == nullptr || ticks == 0) return;
@@ -322,6 +363,7 @@ void appBtDisconnect(void) {
 void appBtSetDiscoverable(bool on) {
   g_discoverable = on;
   bleApplyAdvertising();
+  prefsTouch();
 }
 bool appBtDiscoverable(void) { return g_discoverable; }
 bool appBtAdvertising(void) { return NimBLEDevice::getAdvertising()->isAdvertising(); }
@@ -366,15 +408,17 @@ void appSetBrightness(uint8_t pct) {
   g_brightness = pct;
   // Don't fight the blank: while asleep the new level is applied on wake.
   if (!g_screenBlank) backlightWrite(pct);
+  prefsTouch();
 }
 uint8_t appGetBrightness(void) { return g_brightness; }
 void appSetAlwaysOn(bool on) {
   g_alwaysOn = on;
   screenWake();  // on: light it and keep it lit / off: start a fresh countdown
+  prefsTouch();
 }
 bool appAlwaysOn(void) { return g_alwaysOn; }
 void appWakeScreen(void) { screenWake(); }
-void appSetHaptics(bool on) { g_hapticsOn = on; }
+void appSetHaptics(bool on) { g_hapticsOn = on; prefsTouch(); }
 bool appHapticsEnabled(void) { return g_hapticsOn; }
 void appHapticTick(void)  { if (g_hapticsOn && g_hapticsPresent) hapticsPlay(HAPTIC_FX_TICK); }
 void appHapticPress(void) { if (g_hapticsOn && g_hapticsPresent) hapticsPlay(HAPTIC_FX_PRESS); }
@@ -497,6 +541,10 @@ void setup() {
   delay(600);  // let USB-CDC re-attach so early logs aren't lost
   Serial.println("\n=== ScrollKnob (LVGL) setup ===");
 
+  // Settings first: the backlight, the haptics gate and the BLE advertising
+  // state below all start from whatever was saved.
+  prefsLoad();
+
   // Encoder
   pinMode(ENC_A_PIN, INPUT_PULLUP);
   pinMode(ENC_B_PIN, INPUT_PULLUP);
@@ -582,6 +630,9 @@ void loop() {
   // Blank the panel after SCREEN_TIMEOUT_MS of no dial/touch input (unless
   // Always-On is set).
   screenIdleTick(now);
+
+  // Write any changed settings back to NVS once they have settled.
+  prefsTick(now);
 
   // LVGL render, then per-frame UI logic. The order matters: the FPS screen
   // blits its viewport straight to the panel from uiTick(), so LVGL has to have

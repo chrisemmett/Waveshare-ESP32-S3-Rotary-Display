@@ -131,6 +131,13 @@ backlight PWM live, with a progress bar), **Haptics** (ON/OFF, gates all haptic
 feedback), **Bluetooth** (live link state — `CONNECTED` / `FINDABLE` / `OFF`;
 opens the Bluetooth screen), and **Always-On** (`ON`/`OFF` — see below).
 
+Every setting is **saved to NVS and restored at boot** — brightness, haptics,
+Always-On, and Discoverable. Writes are deferred rather than immediate:
+brightness moves 5 % per detent, so saving on change would put a flash write on
+every click of the dial. A change marks the block dirty and it is flushed once
+the dial has been still for ~1.2 s. First boot (or a wiped NVS) falls back to
+80 %, haptics on, Always-On off, discoverable.
+
 ### Bluetooth
 A control panel for the BLE link, one level under Settings. The advertised name
 (`ScrollKnob`) sits under the header so it can be matched against the host's
@@ -156,7 +163,7 @@ rotating away or waiting it out cancels. There is no keyboard here, and a stray
 detent shouldn't be one press away from unpairing a laptop.
 
 The bond list is NimBLE's own store, so it survives reboots (and so does a
-forget). Discoverable resets to `ON` on boot, like every other setting.
+forget), and Discoverable is saved with the other settings.
 
 ### Screen sleep
 With **Always-On `OFF`** (the default) the backlight switches off after **10 s**
@@ -172,8 +179,9 @@ finishes while it is asleep is still seen — and stays seen.
 
 With **Always-On `ON`** the screen never blanks (and lights up immediately if it
 was already asleep). Switching it back off starts a fresh 10 s countdown. The
-timeout is `SCREEN_TIMEOUT_MS` in `ScrollKnob.ino`; neither this nor any other
-setting is persisted across a reboot yet.
+timeout itself is a compile-time constant (`SCREEN_TIMEOUT_MS` in
+`ScrollKnob.ino`), but the Always-On choice is saved with the rest of the
+settings.
 
 ## Code layout
 
@@ -210,7 +218,8 @@ mirrors the raw CST816 coordinates so taps line up after a flip.
 | **NimBLE-Arduino** (2.x) | h2zero | BLE HID mouse (the Scroll app) |
 
 Install "esp32 by Espressif Systems" via the Boards Manager if you haven't. No
-encoder or touch library is needed — both are driven inline.
+encoder or touch library is needed — both are driven inline, and `Preferences`
+(the NVS-backed settings store) ships with the ESP32 core.
 
 ### 2. LVGL configuration (no `lv_conf.h` to place)
 

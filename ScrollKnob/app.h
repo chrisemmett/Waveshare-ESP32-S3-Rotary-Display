@@ -1,6 +1,10 @@
 // Hardware services the main sketch (ScrollKnob.ino) provides to the UI layer.
 // The UI never touches Arduino_GFX / NimBLE / Wire directly; it goes through
 // these so the render layer stays hardware-agnostic.
+//
+// The user settings behind these calls (brightness, haptics, always-on,
+// discoverable) are persisted to NVS by the sketch and restored at boot. The UI
+// just calls the setter; saving is deferred and automatic.
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
