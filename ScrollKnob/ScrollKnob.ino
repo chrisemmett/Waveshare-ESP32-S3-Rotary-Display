@@ -309,15 +309,26 @@ static bool g_hapticsPresent = false;
 // ============================ Settings persistence (NVS) ============================
 // Every user-facing setting lives in one NVS namespace, written back as a set.
 //
-// Writes are DEFERRED, not immediate: brightness moves 5 % per detent, so
-// saving on change would put a flash write on every click of the dial. A change
-// only marks the block dirty; prefsTick() flushes once the dial has been still
-// for PREFS_FLUSH_MS. NVS skips a write when the stored value already matches,
-// so flushing all four keys together costs nothing for the ones that didn't
-// move. The defaults above (80 %, haptics on, always-on off, discoverable) are
-// what a first boot - or a wiped NVS - falls back to.
+// Writes are DEFERRED, not immediate - and the reason is stalls, not flash
+// wear. NVS is log-structured: a changed value appends one 32-byte entry, and
+// only when a page fills (126 entries per 4 KB sector) does compaction erase a
+// sector, so endurance sits in the millions of changes and was never the
+// binding constraint. What does bite is that every flash write disables the
+// instruction cache on both cores, and the compaction landing every ~126
+// changes carries a sector erase measured in tens of milliseconds. Saving on
+// each detent would drop that hitch into the middle of the one gesture that has
+// to feel smooth.
+//
+// So a change only marks the block dirty; prefsTick() flushes once nothing has
+// moved for PREFS_FLUSH_MS - long enough to collapse a dial sweep into a single
+// write (detents land far closer together than this), short enough that pulling
+// the power right after a change rarely loses it. NVS compares before writing
+// and skips a value that already matches, so flushing all four keys together
+// costs a read, not a write, for the three that didn't move. The defaults above
+// (80 %, haptics on, always-on off, discoverable) are what a first boot - or a
+// wiped NVS - falls back to.
 #define PREFS_NS "scrollknob"
-#define PREFS_FLUSH_MS 1200
+#define PREFS_FLUSH_MS 400
 
 static Preferences g_prefs;
 static bool g_prefsDirty = false;

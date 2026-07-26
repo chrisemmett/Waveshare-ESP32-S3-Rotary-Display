@@ -132,11 +132,23 @@ feedback), **Bluetooth** (live link state — `CONNECTED` / `FINDABLE` / `OFF`;
 opens the Bluetooth screen), and **Always-On** (`ON`/`OFF` — see below).
 
 Every setting is **saved to NVS and restored at boot** — brightness, haptics,
-Always-On, and Discoverable. Writes are deferred rather than immediate:
-brightness moves 5 % per detent, so saving on change would put a flash write on
-every click of the dial. A change marks the block dirty and it is flushed once
-the dial has been still for ~1.2 s. First boot (or a wiped NVS) falls back to
-80 %, haptics on, Always-On off, discoverable.
+Always-On, and Discoverable.
+
+Writes are **deferred rather than immediate, to avoid stalls rather than flash
+wear**. NVS is log-structured: a changed value appends one 32-byte entry and
+only erases a sector when a page fills (126 entries per 4 KB sector), which puts
+endurance in the millions of changes — not a real constraint here. The cost that
+does bite is that every flash write disables the instruction cache on *both*
+cores, and the compaction landing every ~126 changes carries a sector erase
+measured in tens of milliseconds. Brightness moves 5 % per detent, so saving on
+change would drop that hitch into the middle of the one gesture that has to feel
+smooth.
+
+So a change marks the block dirty and it is flushed once nothing has moved for
+~400 ms — long enough to collapse a dial sweep into a single write, short enough
+that pulling the power right after a change rarely loses it, which is the one
+real cost of deferring. First boot (or a wiped NVS) falls back to 80 %, haptics
+on, Always-On off, discoverable.
 
 ### Bluetooth
 A control panel for the BLE link, one level under Settings. The advertised name
