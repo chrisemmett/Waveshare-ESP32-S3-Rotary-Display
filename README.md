@@ -79,9 +79,13 @@ which is the only thing a knob is good at. Touch is limited to **tap to start**,
 **tap to retry** after dying, and the **MENU** chevron, same as every other app.
 
 Imps chase you across a 24×24 arena in escalating waves (`3 + wave` of them, up to
-8). They're deliberately *almost as fast as you* — and faster from wave 5 — because
-if you could outrun everything there'd be no reason to ever turn. The status bar
-under the viewport tracks health, wave, and kills.
+8). They run at **half your pace** (`ENEMY_SPEED_FRAC`), so you can always break
+away from one: nothing stops an imp and the player sharing a cell, and an imp that
+matches your speed just rides inside you with neither able to peel off. Escalation
+comes from the head-count and from being surrounded rather than from foot speed —
+stragglers more than 8 cells out do get a 1.6× boost to rejoin the fight, which is
+still only 0.8× your pace. The status bar under the viewport tracks health, wave,
+and kills.
 
 Clearing a wave buys you a **60-second breather** with nothing hunting you and a
 single **medkit** dropped somewhere on the floor, at least 5 cells away. Run over
@@ -305,7 +309,8 @@ per detent.
 - **Timer step / max?** `TM_STEP` and `TM_MAX` in `ui_timer.cpp`.
 - **Dial of Doom too hard / turning mirrored?** All the knobs are `#define`s at the
   top of `ui_fps.cpp`: `TURN_PER_DETENT` and `TURN_LERP` for the feel of the dial,
-  `MOVE_SPEED` vs `ENEMY_SPEED*` for the chase, `ENEMY_DAMAGE` / `ENEMY_HIT_MS`
+  `ENEMY_SPEED_FRAC` (imp speed as a fraction of `MOVE_SPEED`; at `1.0` they glue
+  to you and can't be shaken) for the chase, `ENEMY_DAMAGE` / `ENEMY_HIT_MS`
   for difficulty, `WAVE_GAP_MS` / `PACK_HEAL` / `PACK_MIN_D` / `PACK_MAX_D` for how
   long and how generous the medkit breather is, and `FPS_INVERT_DIR` if clockwise
   turns you left.

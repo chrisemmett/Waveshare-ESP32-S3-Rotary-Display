@@ -35,11 +35,13 @@
 #define ENEMY_REACH 1.30f
 #define ENEMY_HIT_MS 1250
 #define ENEMY_DAMAGE 7
-#define ENEMY_SPEED0 1.45f      // wave 1 chase speed (cf. MOVE_SPEED 2.1)
-#define ENEMY_SPEED_WAVE 0.14f  // added per wave - they out-pace you by wave 5
-#define ENEMY_SPEED_MAX 2.40f
+// Chase speed as a fraction of MOVE_SPEED, flat across every wave. Anything near
+// 1.0 lets an imp match you exactly - and since nothing stops an imp and the
+// player sharing a cell, a matched-speed imp just rides inside you and neither
+// can break away. Half your pace guarantees you can always peel off.
+#define ENEMY_SPEED_FRAC 0.50f
 #define STRAGGLER_DIST 8.0f     // beyond this an imp hurries to rejoin the fight
-#define STRAGGLER_BOOST 1.6f
+#define STRAGGLER_BOOST 1.6f    // still only 0.8x your pace, so it stays escapable
 #define STUCK_MS 7000           // no progress for this long -> relocate the imp
 #define SLIDE_MS 1200           // wall-hug commitment, long enough to round a corner
 #define WAVE_GAP_MS 60000       // breather between waves - go find the medkit
@@ -469,11 +471,11 @@ static void autoFire(uint32_t now) {
 }
 
 static void stepEnemies(uint32_t now, float dt) {
-  // Deliberately close to MOVE_SPEED, and past it by the later waves. You can't
-  // stop running, so if imps were comfortably slower than you the whole game
-  // would be "walk away from everything" - there'd be no reason to ever turn.
-  float speed = ENEMY_SPEED0 + ENEMY_SPEED_WAVE * (float)s_wave;
-  if (speed > ENEMY_SPEED_MAX) speed = ENEMY_SPEED_MAX;
+  // Half your pace, every wave. Escalation comes from the head-count (3 + wave,
+  // up to 8) and from being surrounded, not from foot speed - an imp that keeps
+  // up with you can never be shaken off, and shares your cell while it swings.
+  // Raise ENEMY_SPEED_FRAC to make the chase tighter; at 1.0 they glue to you.
+  float speed = MOVE_SPEED * ENEMY_SPEED_FRAC;
   int liveCount = 0;
 
   for (int i = 0; i < MAX_ENEMY; i++) {
