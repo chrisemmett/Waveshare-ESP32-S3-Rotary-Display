@@ -13,11 +13,43 @@ extern "C" {
 // host is connected.
 void appEmitWheel(int8_t ticks);
 
-// Forget every Bluetooth bond and drop the current link (host must re-pair).
-void appForgetBonds(void);
+// ---- Bluetooth ----
+// Addresses are formatted "aa:bb:cc:dd:ee:ff": 17 chars plus the NUL.
+#define APP_BT_ADDR_LEN 18
+// Most bonds the UI will enumerate. NimBLE's own store is normally smaller
+// (CONFIG_BT_NIMBLE_MAX_BONDS, 3 by default), so this is just a safe ceiling.
+#define APP_BT_MAX_BONDS 8
 
 // True while a BLE host is connected.
 bool appConnected(void);
+
+// The advertised name - what a host sees in its Bluetooth picker.
+const char *appBtName(void);
+
+// Drop the current link but keep the bond, so the host can come back. Most
+// hosts reconnect within seconds if they are still in range and we are
+// discoverable, so this is "hand the wheel to another machine", not "off".
+void appBtDisconnect(void);
+
+// Discoverable = we advertise, which is how a new host finds us AND how a
+// bonded host reconnects. Turning it off stops advertising outright: nothing
+// can connect until it goes back on. Advertising also pauses by itself while a
+// host is connected (nothing else could connect anyway) and resumes when that
+// host drops.
+void appBtSetDiscoverable(bool on);
+bool appBtDiscoverable(void);
+bool appBtAdvertising(void);  // really broadcasting right now
+
+// Identity address of the connected host; writes "" when there is no link.
+void appBtPeerAddr(char *out, uint32_t len);
+
+// Bonded (paired) hosts. This is NimBLE's bond store, so it survives reboots.
+// Indices are only valid until the list changes - re-read after a forget.
+uint8_t appBtBondCount(void);
+bool    appBtBondAddr(uint8_t idx, char *out, uint32_t len);
+bool    appBtBondIsConnected(uint8_t idx);
+void    appBtForgetBond(uint8_t idx);  // drops the link too if it is that host
+void    appBtForgetAll(void);          // forget every bond + drop the link
 
 // Backlight brightness, 0..100 %. Driven by an LEDC PWM channel on LCD_BL.
 void    appSetBrightness(uint8_t pct);

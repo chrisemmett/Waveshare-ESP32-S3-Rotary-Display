@@ -1,6 +1,7 @@
 // Settings: Brightness / Haptics / Bluetooth / Always-On. Rotate = move focus
 // (or adjust brightness in edit mode); press = activate the focused row.
-// Haptics and Always-On are plain ON/OFF toggles backed by the .ino state.
+// Haptics and Always-On are plain ON/OFF toggles backed by the .ino state;
+// Bluetooth is a live status that opens the Bluetooth screen (ui_bt.cpp).
 #include "ui_internal.h"
 #include <stdio.h>
 
@@ -11,15 +12,9 @@ static lv_obj_t *s_scr = nullptr;
 static lv_obj_t *s_rows[ROW_N];
 static lv_obj_t *s_vals[ROW_N];
 static lv_obj_t *s_bar = nullptr;
-static lv_timer_t *s_btTimer = nullptr;
 
 static int s_focus = 0;
 static bool s_edit = false;  // brightness edit mode
-
-static void setBtVal(const char *txt, uint32_t col) {
-  lv_label_set_text(s_vals[ROW_BT], txt);
-  lv_obj_set_style_text_color(s_vals[ROW_BT], lv_color_hex(col), 0);
-}
 
 static void refreshValues(void) {
   char b[8];
@@ -30,6 +25,16 @@ static void refreshValues(void) {
   bool h = appHapticsEnabled();
   lv_label_set_text(s_vals[ROW_HAPTIC], h ? "ON" : "OFF");
   lv_obj_set_style_text_color(s_vals[ROW_HAPTIC], lv_color_hex(h ? COL_GREEN : COL_FAINT2), 0);
+
+  // Three states worth telling apart at a glance: linked, findable, or off the
+  // air entirely.
+  const char *bt;
+  uint32_t btCol;
+  if (appConnected())            { bt = "CONNECTED";  btCol = COL_GREEN;  }
+  else if (appBtAdvertising())   { bt = "FINDABLE";   btCol = COL_ACCENT; }
+  else                           { bt = "OFF";        btCol = COL_FAINT2; }
+  lv_label_set_text(s_vals[ROW_BT], bt);
+  lv_obj_set_style_text_color(s_vals[ROW_BT], lv_color_hex(btCol), 0);
 
   bool a = appAlwaysOn();
   lv_label_set_text(s_vals[ROW_ALWAYS], a ? "ON" : "OFF");
@@ -74,12 +79,6 @@ static void row_click_cb(lv_event_t *e) {
   settings_press();
 }
 
-static void btRevert_cb(lv_timer_t *t) {
-  setBtVal("DISCONNECT", COL_RED);
-  lv_timer_del(t);
-  s_btTimer = nullptr;
-}
-
 static void build(void) {
   s_scr = make_screen_base();
   make_marker(s_scr);
@@ -113,7 +112,7 @@ static void build(void) {
   lv_obj_set_style_bg_opa(s_bar, LV_OPA_COVER, LV_PART_INDICATOR);
 
   makeRow(ROW_HAPTIC, "Haptics", "ON", COL_GREEN);
-  makeRow(ROW_BT, "Bluetooth", "DISCONNECT", COL_RED);
+  makeRow(ROW_BT, "Bluetooth", "OFF", COL_FAINT2);
   makeRow(ROW_ALWAYS, "Always-On", "OFF", COL_FAINT2);
   s_scr = saved;
 
@@ -154,10 +153,7 @@ void settings_press(void) {
       refreshValues();
       break;
     case ROW_BT:
-      appForgetBonds();
-      setBtVal("DISCONNECTED", COL_DIM);
-      if (s_btTimer) lv_timer_del(s_btTimer);
-      s_btTimer = lv_timer_create(btRevert_cb, 1600, NULL);
+      navGo(SCR_BT);
       break;
     case ROW_ALWAYS:
       // ON = the screen never blanks. OFF = it blanks after the idle timeout.
@@ -168,5 +164,5 @@ void settings_press(void) {
 }
 
 void settings_conn_changed(void) {
-  // BT row is an action, not a live status; nothing to repaint here.
+  if (s_scr) refreshValues();  // the Bluetooth row tracks the link
 }

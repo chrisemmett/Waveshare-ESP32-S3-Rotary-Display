@@ -24,7 +24,9 @@
 #define SCR_CY 180
 
 // ---- Screens ----
-enum ScreenId { SCR_LAUNCHER, SCR_SCROLL, SCR_TIMER, SCR_SETTINGS, SCR_GAME, SCR_FPS };
+// SCR_BT hangs off Settings rather than the launcher ring - it is a control
+// panel for the BLE link, not an app.
+enum ScreenId { SCR_LAUNCHER, SCR_SCROLL, SCR_TIMER, SCR_SETTINGS, SCR_GAME, SCR_FPS, SCR_BT };
 void navGo(ScreenId id);
 ScreenId navCurrent(void);
 
@@ -33,6 +35,8 @@ lv_obj_t *make_screen_base(void);
 lv_obj_t *make_triangle(lv_obj_t *parent, int w, int h, bool pointDown, uint32_t color);
 lv_obj_t *make_marker(lv_obj_t *parent);        // accent triangle at 12 o'clock
 lv_obj_t *make_back_chevron(lv_obj_t *parent);  // MENU chevron, bottom-centre
+// Same affordance pointing somewhere other than the launcher (nested screens).
+lv_obj_t *make_back_chevron_to(lv_obj_t *parent, ScreenId dest, const char *label);
 lv_obj_t *make_label(lv_obj_t *parent, const char *txt, const lv_font_t *font, uint32_t color);
 
 // ---- Per-screen entry points (each ui_*.cpp) ----
@@ -40,5 +44,6 @@ void launcher_show(void);   void launcher_encoder(int dir); void launcher_press(
 void scroll_show(void);     void scroll_encoder(int dir);   void scroll_press(void);   void scroll_tick(void);
 void timer_show(void);      void timer_encoder(int dir);    void timer_press(void);    void timer_tick(void);
 void settings_show(void);   void settings_encoder(int dir); void settings_press(void); void settings_conn_changed(void);
+void bt_show(void);         void bt_encoder(int dir);       void bt_press(void);       void bt_conn_changed(void);  void bt_tick(void);
 void game_show(void);       void game_encoder(int dir);     void game_tick(void);
 void fps_show(void);        void fps_encoder(int dir);      void fps_tick(void);
