@@ -221,10 +221,15 @@ static void backlightWrite(uint8_t pct) {
 // Blank the panel (backlight off) after SCREEN_TIMEOUT_MS with no dial/touch
 // input. Turning the dial or tapping the screen wakes it; while blank, that
 // wake input is swallowed so it never doubles as a UI action.
+//
+// The Always-On setting (Settings > Always-On) disables the whole thing: when
+// it is ON the panel stays lit indefinitely; when it is OFF the timeout below
+// applies. There are only those two states - no "auto".
 #define SCREEN_TIMEOUT_MS 10000
 static uint32_t g_lastActivityMs = 0;
 static bool g_screenBlank = false;
 static bool g_consumeTouch = false;  // swallow the waking touch until the finger lifts
+static bool g_alwaysOn = false;      // Settings > Always-On
 
 static void screenNoteActivity() { g_lastActivityMs = millis(); }
 
@@ -232,6 +237,10 @@ static void screenWake() {
   if (g_screenBlank) {
     g_screenBlank = false;
     backlightWrite(g_brightness);
+    // Whatever woke us (dial, alarm, Always-On) can coincide with a finger on
+    // the glass: swallow that touch until it lifts so the wake never lands as a
+    // UI tap. Cleared by the first sample with no finger down.
+    g_consumeTouch = true;
   }
   g_lastActivityMs = millis();
 }
@@ -241,6 +250,18 @@ static void screenBlank() {
     g_screenBlank = true;
     backlightWrite(0);
   }
+}
+
+// Called once per loop(): blank the panel when the idle timeout has run out.
+// Always-On short-circuits it and also keeps the countdown pinned to "now", so
+// switching Always-On off gives a full fresh SCREEN_TIMEOUT_MS before blanking.
+static void screenIdleTick(uint32_t now) {
+  if (g_alwaysOn) {
+    g_lastActivityMs = now;
+    return;
+  }
+  if (!g_screenBlank && (uint32_t)(now - g_lastActivityMs) >= SCREEN_TIMEOUT_MS)
+    screenBlank();
 }
 
 // ============================ Haptics gate ============================
@@ -260,8 +281,18 @@ void appForgetBonds(void) {
   if (g_connected) bleServer->disconnect(g_connHandle);
 }
 bool appConnected(void) { return g_connected; }
-void appSetBrightness(uint8_t pct) { g_brightness = pct; backlightWrite(pct); }
+void appSetBrightness(uint8_t pct) {
+  g_brightness = pct;
+  // Don't fight the blank: while asleep the new level is applied on wake.
+  if (!g_screenBlank) backlightWrite(pct);
+}
 uint8_t appGetBrightness(void) { return g_brightness; }
+void appSetAlwaysOn(bool on) {
+  g_alwaysOn = on;
+  screenWake();  // on: light it and keep it lit / off: start a fresh countdown
+}
+bool appAlwaysOn(void) { return g_alwaysOn; }
+void appWakeScreen(void) { screenWake(); }
 void appSetHaptics(bool on) { g_hapticsOn = on; }
 bool appHapticsEnabled(void) { return g_hapticsOn; }
 void appHapticTick(void)  { if (g_hapticsOn && g_hapticsPresent) hapticsPlay(HAPTIC_FX_TICK); }
@@ -286,28 +317,44 @@ static void lvFlush(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *px) {
 
 static void lvTouchRead(lv_indev_drv_t *drv, lv_indev_data_t *data) {
   static int lx = 0, ly = 0;
+  static bool wasDown = false;
   int x, y;
-  if (tpRead(&x, &y)) {
-    if (g_screenBlank || g_consumeTouch) {
-      // Tap wakes the screen; swallow this touch (and every sample until the
-      // finger lifts) so waking never registers as a UI tap.
-      g_consumeTouch = true;
-      screenWake();
-      data->state = LV_INDEV_STATE_RELEASED;
-      data->point.x = lx;
-      data->point.y = ly;
-      return;
-    }
-    screenNoteActivity();
-    lx = x;
-    ly = y;
-    data->state = LV_INDEV_STATE_PRESSED;
-  } else {
-    g_consumeTouch = false;
-    data->state = LV_INDEV_STATE_RELEASED;
-  }
+  bool down = tpRead(&x, &y);
+
+  // Touch only counts as activity on a press/release edge or when the finger
+  // actually moves. A CST816 that latches a stale "finger down" report (it does
+  // happen) would otherwise pin the idle countdown at zero forever - the screen
+  // would never blank, and once blank it would re-wake on its own every frame.
+  bool moved = down && wasDown && (x != lx || y != ly);
+  bool edge = (down != wasDown);
+  bool active = edge || moved;
+  if (down) { lx = x; ly = y; }
+  wasDown = down;
+
   data->point.x = lx;
   data->point.y = ly;
+
+  if (!down) {
+    if (active) screenNoteActivity();  // countdown restarts when the finger lifts
+    g_consumeTouch = false;
+    data->state = LV_INDEV_STATE_RELEASED;
+    return;
+  }
+  if (g_screenBlank) {
+    // A real tap wakes the screen; screenWake() then swallows it (here and on
+    // every sample until the finger lifts) so waking never doubles as a UI tap.
+    // A stale held report is not a tap, so it must not wake anything.
+    if (active) screenWake();
+    data->state = LV_INDEV_STATE_RELEASED;
+    return;
+  }
+  if (g_consumeTouch) {  // still swallowing the tap that woke the screen
+    if (active) screenNoteActivity();
+    data->state = LV_INDEV_STATE_RELEASED;
+    return;
+  }
+  if (active) screenNoteActivity();
+  data->state = LV_INDEV_STATE_PRESSED;
 }
 
 static void lvglInit() {
@@ -439,10 +486,9 @@ void loop() {
     prevConn = conn;
   }
 
-  // Blank the panel after SCREEN_TIMEOUT_MS of no dial/touch input.
-  if (!g_screenBlank && (uint32_t)(now - g_lastActivityMs) >= SCREEN_TIMEOUT_MS) {
-    screenBlank();
-  }
+  // Blank the panel after SCREEN_TIMEOUT_MS of no dial/touch input (unless
+  // Always-On is set).
+  screenIdleTick(now);
 
   // UI per-frame logic + LVGL render
   uiTick();
