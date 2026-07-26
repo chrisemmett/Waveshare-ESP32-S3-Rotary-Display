@@ -10,3 +10,4 @@ LV_FONT_DECLARE(font_jbm_10);  // JetBrains Mono 400 10px - titles / meta / stat
 LV_FONT_DECLARE(font_jbm_11);  // JetBrains Mono 500 11px - mode pill
 LV_FONT_DECLARE(font_jbm_12);  // JetBrains Mono 400 12px - settings values
 LV_FONT_DECLARE(font_jbm_52);  // JetBrains Mono 700 52px - timer MM:SS (digits+colon)
+LV_FONT_DECLARE(font_sg_46);   // Space Grotesk 600 46px - timer finale ("TIME'S UP" glyphs only)

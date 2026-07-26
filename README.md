@@ -4,7 +4,7 @@ Turn a **Waveshare ESP32-S3-Knob-Touch-LCD-1.8** into a polished, **multi-functi
 knob** — a radial-arc launcher on its 360×360 round display with five apps:
 
 - **Scroll Wheel** — a Bluetooth-HID scroll controller for a laptop.
-- **Countdown** — a timer with a depleting progress ring and a haptic alarm.
+- **Countdown** — a timer with a depleting progress ring and a flashing-green alarm.
 - **Safe Cracker** — crack a 5-tumbler combination by feel.
 - **Dial of Doom** — a textured-raycaster FPS played entirely on the dial.
 - **Settings** — brightness, haptics, and Bluetooth disconnect.
@@ -51,10 +51,19 @@ tick). **Tapping the mode pill toggles LINE / PAGE** (PAGE sends a larger delta)
 tick counter shows in the mode pill. Scrolling only reaches a host once paired.
 
 ### Countdown
-A full-bleed progress ring (idle grey / running amber / finished red) around a
-big `MM:SS` readout. **Rotate** (while not running) sets the time in **30 s**
+A full-bleed progress ring (idle grey / running amber) around a big `MM:SS`
+readout. **Rotate** (while not running) sets the time in **30 s**
 steps, 0–59:59. **Tapping the centre** starts / pauses; tapping when finished resets to the last
-value. At zero the ring flashes and the DRV2605 buzzes.
+value.
+
+At zero the screen takes over as the alarm — the DRV2605 on this board is far
+too gentle to notice across a desk. The ring closes to a full circle, thickens
+to 40 px, turns green and strobes at ~2 Hz, the `MM:SS` and status caption give
+way to a solid-white **TIME'S UP** in 46 px Space Grotesk (the banner stays at
+full opacity so the strobe never makes it unreadable), the MENU chevron steps
+aside, and the backlight is held on for two minutes so the alarm can't blank
+itself away after the usual 10 s. Tapping the centre clears it and restores the
+last duration. (The buzz still fires, as a bonus rather than the main event.)
 
 ### Safe Cracker
 A safe-cracking game (5-tumbler combo, dial 0–49, wraps). Rotate to hunt for each
@@ -129,7 +138,8 @@ lifts, so nothing is activated by accident. The countdown restarts from the
 press edge, from the finger lifting, or from any movement while touching — a
 touch controller that latches a stale "finger down" report can't hold the screen
 awake, and can't wake it back up on its own either. The timer's alarm wakes the
-screen, so a countdown that finishes while it is asleep is still seen.
+screen and then holds it awake for `FINALE_HOLD_MS` (2 min), so a countdown that
+finishes while it is asleep is still seen — and stays seen.
 
 With **Always-On `ON`** the screen never blanks (and lights up immediately if it
 was already asleep). Switching it back off starts a fresh 10 s countdown. The
@@ -307,6 +317,10 @@ per detent.
 - **Screen sleeps too soon / too late?** `SCREEN_TIMEOUT_MS` (default `10000`).
   Settings → **Always-On** turns the blanking off entirely at runtime.
 - **Timer step / max?** `TM_STEP` and `TM_MAX` in `ui_timer.cpp`.
+- **Alarm not loud enough / stays lit too long?** Also `ui_timer.cpp`:
+  `FINALE_ARC_W` (ring thickness once it fires), the `lv_anim_set_values` /
+  `lv_anim_set_time` pair in `startFinale()` (strobe depth and speed), and
+  `FINALE_HOLD_MS` (how long the screen refuses to blank afterwards).
 - **Dial of Doom too hard / turning mirrored?** All the knobs are `#define`s at the
   top of `ui_fps.cpp`: `TURN_PER_DETENT` and `TURN_LERP` for the feel of the dial,
   `ENEMY_SPEED_FRAC` (imp speed as a fraction of `MOVE_SPEED`; at `1.0` they glue
