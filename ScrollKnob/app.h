@@ -23,6 +23,17 @@ bool appConnected(void);
 void    appSetBrightness(uint8_t pct);
 uint8_t appGetBrightness(void);
 
+// Always-On display (Settings toggle). OFF: the screen blanks after
+// SCREEN_TIMEOUT_MS of no dial/touch input, and the next input wakes it without
+// reaching the UI. ON: the screen never blanks (and lights up immediately if it
+// was already blank).
+void appSetAlwaysOn(bool on);
+bool appAlwaysOn(void);
+
+// Light the screen and restart the idle countdown - for events the user must
+// see even if they weren't touching the device (e.g. the timer alarm).
+void appWakeScreen(void);
+
 // Haptics on/off (Settings toggle) and the three feedback pulses. The pulses
 // are silently ignored when haptics are off or no DRV2605 was detected.
 void appSetHaptics(bool on);

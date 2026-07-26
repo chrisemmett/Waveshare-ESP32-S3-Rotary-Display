@@ -74,7 +74,23 @@ feels reversed (all in `ui_game.cpp`).
 A focusable list: **Brightness** (tap to edit, then rotate ±5 % — drives the
 backlight PWM live, with a progress bar), **Haptics** (ON/OFF, gates all haptic
 feedback), **Bluetooth** (`DISCONNECT` — forgets every bond and drops the link),
-and **Always-On** (`AUTO`, static for now).
+and **Always-On** (`ON`/`OFF` — see below).
+
+### Screen sleep
+With **Always-On `OFF`** (the default) the backlight switches off after **10 s**
+with no dial or touch input. Turning the dial or tapping the screen brings it
+back, and that first input *only* wakes: the waking detent is not routed to the
+UI (no scroll, no haptic) and the waking tap is swallowed until the finger
+lifts, so nothing is activated by accident. The countdown restarts from the
+press edge, from the finger lifting, or from any movement while touching — a
+touch controller that latches a stale "finger down" report can't hold the screen
+awake, and can't wake it back up on its own either. The timer's alarm wakes the
+screen, so a countdown that finishes while it is asleep is still seen.
+
+With **Always-On `ON`** the screen never blanks (and lights up immediately if it
+was already asleep). Switching it back off starts a fresh 10 s countdown. The
+timeout is `SCREEN_TIMEOUT_MS` in `ScrollKnob.ino`; neither this nor any other
+setting is persisted across a reboot yet.
 
 ## Code layout
 
@@ -242,6 +258,8 @@ per detent.
 - **Scroll feels backwards?** Set `WHEEL_INVERT` to `true`.
 - **False reverse counts on slow turns?** Raise `REST_QUIET_US` toward
   `8000`–`10000`; if fast cranking drops clicks, lower toward `2000` (default `5000`).
+- **Screen sleeps too soon / too late?** `SCREEN_TIMEOUT_MS` (default `10000`).
+  Settings → **Always-On** turns the blanking off entirely at runtime.
 - **Timer step / max?** `TM_STEP` and `TM_MAX` in `ui_timer.cpp`.
 - **Haptic feel?** The `HAPTIC_FX_*` effect ids in `haptics.h`.
 - **Debugging?** Set `DIAG 1` for a boot delay, an I²C scan, and setup logs.

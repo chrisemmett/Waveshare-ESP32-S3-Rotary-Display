@@ -1,5 +1,6 @@
 // Settings: Brightness / Haptics / Bluetooth / Always-On. Rotate = move focus
 // (or adjust brightness in edit mode); press = activate the focused row.
+// Haptics and Always-On are plain ON/OFF toggles backed by the .ino state.
 #include "ui_internal.h"
 #include <stdio.h>
 
@@ -29,6 +30,10 @@ static void refreshValues(void) {
   bool h = appHapticsEnabled();
   lv_label_set_text(s_vals[ROW_HAPTIC], h ? "ON" : "OFF");
   lv_obj_set_style_text_color(s_vals[ROW_HAPTIC], lv_color_hex(h ? COL_GREEN : COL_FAINT2), 0);
+
+  bool a = appAlwaysOn();
+  lv_label_set_text(s_vals[ROW_ALWAYS], a ? "ON" : "OFF");
+  lv_obj_set_style_text_color(s_vals[ROW_ALWAYS], lv_color_hex(a ? COL_GREEN : COL_FAINT2), 0);
 }
 
 static void applyFocus(void) {
@@ -109,7 +114,7 @@ static void build(void) {
 
   makeRow(ROW_HAPTIC, "Haptics", "ON", COL_GREEN);
   makeRow(ROW_BT, "Bluetooth", "DISCONNECT", COL_RED);
-  makeRow(ROW_ALWAYS, "Always-On", "AUTO", COL_DIM);
+  makeRow(ROW_ALWAYS, "Always-On", "OFF", COL_FAINT2);
   s_scr = saved;
 
   for (int i = 0; i < ROW_N; i++)
@@ -155,6 +160,9 @@ void settings_press(void) {
       s_btTimer = lv_timer_create(btRevert_cb, 1600, NULL);
       break;
     case ROW_ALWAYS:
+      // ON = the screen never blanks. OFF = it blanks after the idle timeout.
+      appSetAlwaysOn(!appAlwaysOn());
+      refreshValues();
       break;
   }
 }

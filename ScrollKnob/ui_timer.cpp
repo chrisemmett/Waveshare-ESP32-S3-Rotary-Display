@@ -166,6 +166,7 @@ void timer_tick(void) {
     s_state = TS_DONE;
     redraw();
     startFlash();
+    appWakeScreen();  // an alarm behind a blanked screen is a missed alarm
     appHapticAlarm();
     return;
   }
