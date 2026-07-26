@@ -1,10 +1,12 @@
 # rotary-display
 
 Turn a **Waveshare ESP32-S3-Knob-Touch-LCD-1.8** into a polished, **multi-function
-knob** — a radial-arc launcher on its 360×360 round display with three apps:
+knob** — a radial-arc launcher on its 360×360 round display with five apps:
 
 - **Scroll Wheel** — a Bluetooth-HID scroll controller for a laptop.
 - **Countdown** — a timer with a depleting progress ring and a haptic alarm.
+- **Safe Cracker** — crack a 5-tumbler combination by feel.
+- **Dial of Doom** — a textured-raycaster FPS played entirely on the dial.
 - **Settings** — brightness, haptics, and Bluetooth disconnect.
 
 The UI is built with **LVGL 8.4** (real fonts, anti-aliased arcs, animated ring
@@ -31,7 +33,7 @@ This knob has **no shaft press** — the UI is driven by **rotate + touch**.
 | Input | Effect |
 |---|---|
 | **Rotate** | Move focus / adjust the active value. One detent fires a short haptic. |
-| **Tap** | Activate — open the focused app (tap the centre or its icon), start/pause the timer (tap the centre), toggle the scroll mode pill, or activate a settings row. Fires a confirm haptic. |
+| **Tap** | Activate — open the focused app (tap the centre or its icon), start/pause the timer (tap the centre), toggle the scroll mode pill, start or retry Dial of Doom, or activate a settings row. Fires a confirm haptic. |
 | **Tap MENU** | The chevron at bottom-centre returns to the launcher from any app. |
 
 ## The apps
@@ -70,6 +72,34 @@ open — to start a fresh game; **MENU** returns to the launcher. The combo
 can be printed to Serial with `GAME_DEBUG 1`; flip `GAME_INVERT_DIR` if clockwise
 feels reversed (all in `ui_game.cpp`).
 
+### Dial of Doom
+A first-person shooter whose **only control is the dial**. You **auto-run forward**
+and **auto-fire** at whatever your crosshair is on, so all you ever do is turn —
+which is the only thing a knob is good at. Touch is limited to **tap to start**,
+**tap to retry** after dying, and the **MENU** chevron, same as every other app.
+
+Imps chase you across a 24×24 arena in escalating waves (`3 + wave` of them, up to
+8). They're deliberately *almost as fast as you* — and faster from wave 5 — because
+if you could outrun everything there'd be no reason to ever turn. Clearing a wave
+heals you 15 HP. The status bar under the viewport tracks health, wave, and kills.
+
+The view is a **textured raycaster with billboarded sprites**: running-bond brick
+walls with distance and side shading, floor/ceiling gradients, a depth-sorted
+sprite pass against the wall z-buffer, a bobbing shotgun, muzzle flash, a white
+flash when an imp takes a hit, a melt-into-the-floor death, and a dithered red rim
+vignette when *you* get hit (gold when a wave clears).
+
+**It does not render through LVGL.** The 3D view is drawn into a ~20 KB
+DMA-capable band buffer and pushed straight at the panel with `appBlit()`, ten
+bands per frame — an LVGL canvas would add a full-screen copy on top of the panel
+transfer for no benefit. LVGL still owns the status bar, the MENU chevron, and the
+title/game-over card; those sit *outside* the viewport (or are only shown while the
+viewport is frozen), so the two renderers never contend for the same pixels. This
+is also why `loop()` calls `lv_timer_handler()` **before** `uiTick()` — the blit
+has to be the last thing that touches the panel each frame.
+
+Every row is clipped to the display circle, so the corners are never filled.
+
 ### Settings
 A focusable list: **Brightness** (tap to edit, then rotate ±5 % — drives the
 backlight PWM live, with a progress bar), **Haptics** (ON/OFF, gates all haptic
@@ -85,8 +115,10 @@ Everything is in [`ScrollKnob/`](ScrollKnob):
   display/touch driver + input dispatch. Exposes hardware services via `app.h`
   and forwards input to the UI via `ui.h`.
 - `ui.cpp` + `ui_launcher.cpp` / `ui_scroll.cpp` / `ui_timer.cpp` /
-  `ui_settings.cpp` / `ui_game.cpp` — the LVGL screens (see `ui_internal.h` for
-  shared tokens).
+  `ui_settings.cpp` / `ui_game.cpp` / `ui_fps.cpp` — the LVGL screens (see
+  `ui_internal.h` for shared tokens). `ui_fps.cpp` is the odd one out: it owns a
+  raycaster that writes RGB565 bands and hands them to `appBlit()` rather than
+  drawing through LVGL (see [Dial of Doom](#dial-of-doom)).
 - `haptics.cpp` / `haptics.h` — minimal DRV2605 driver over the shared I²C bus.
 - `src/*.c` — LVGL fonts generated from Space Grotesk / JetBrains Mono by
   [`tools/gen_lvgl_fonts.sh`](tools/gen_lvgl_fonts.sh); declared in `fonts_knob.h`.
@@ -120,7 +152,7 @@ applies that file to every translation unit):
 ```
 -DLV_CONF_SKIP=1              # use LVGL's built-in defaults...
 -DLV_COLOR_16_SWAP=1          # ...overridden here: big-endian 565 for the QSPI panel
--DLV_MEM_SIZE=0x18000         # 96 KB LVGL heap (four retained screens)
+-DLV_MEM_SIZE=0x18000         # 96 KB LVGL heap (six retained screens)
 -DLV_LVGL_H_INCLUDE_SIMPLE=1  # fonts include "lvgl.h"
 ```
 
@@ -243,6 +275,12 @@ per detent.
 - **False reverse counts on slow turns?** Raise `REST_QUIET_US` toward
   `8000`–`10000`; if fast cranking drops clicks, lower toward `2000` (default `5000`).
 - **Timer step / max?** `TM_STEP` and `TM_MAX` in `ui_timer.cpp`.
+- **Dial of Doom too hard / turning mirrored?** All the knobs are `#define`s at the
+  top of `ui_fps.cpp`: `TURN_PER_DETENT` and `TURN_LERP` for the feel of the dial,
+  `MOVE_SPEED` vs `ENEMY_SPEED*` for the chase, `ENEMY_DAMAGE` / `ENEMY_HIT_MS` /
+  `WAVE_HEAL` for difficulty, and `FPS_INVERT_DIR` if clockwise turns you left.
+  `VP_H` trades 3D-view height against status-bar room; `BAND_H` trades RAM for
+  the number of panel transfers per frame.
 - **Haptic feel?** The `HAPTIC_FX_*` effect ids in `haptics.h`.
 - **Debugging?** Set `DIAG 1` for a boot delay, an I²C scan, and setup logs.
 

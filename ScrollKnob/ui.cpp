@@ -15,6 +15,7 @@ void navGo(ScreenId id) {
     case SCR_TIMER:    timer_show();    break;
     case SCR_SETTINGS: settings_show(); break;
     case SCR_GAME:     game_show();     break;
+    case SCR_FPS:      fps_show();      break;
   }
 }
 
@@ -30,6 +31,7 @@ void uiEncoder(int32_t dir) {
     case SCR_TIMER:    timer_encoder(dir);    break;
     case SCR_SETTINGS: settings_encoder(dir); break;
     case SCR_GAME:     game_encoder(dir);     break;
+    case SCR_FPS:      fps_encoder(dir);      break;
   }
 }
 
@@ -50,6 +52,7 @@ void uiTick(void) {
   if (s_cur == SCR_SCROLL) scroll_tick();
   else if (s_cur == SCR_TIMER) timer_tick();
   else if (s_cur == SCR_GAME) game_tick();
+  else if (s_cur == SCR_FPS) fps_tick();
 }
 
 void uiConnChanged(bool connected) {

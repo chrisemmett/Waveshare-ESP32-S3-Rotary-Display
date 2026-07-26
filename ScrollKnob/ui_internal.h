@@ -24,7 +24,7 @@
 #define SCR_CY 180
 
 // ---- Screens ----
-enum ScreenId { SCR_LAUNCHER, SCR_SCROLL, SCR_TIMER, SCR_SETTINGS, SCR_GAME };
+enum ScreenId { SCR_LAUNCHER, SCR_SCROLL, SCR_TIMER, SCR_SETTINGS, SCR_GAME, SCR_FPS };
 void navGo(ScreenId id);
 ScreenId navCurrent(void);
 
@@ -41,3 +41,4 @@ void scroll_show(void);     void scroll_encoder(int dir);   void scroll_press(vo
 void timer_show(void);      void timer_encoder(int dir);    void timer_press(void);    void timer_tick(void);
 void settings_show(void);   void settings_encoder(int dir); void settings_press(void); void settings_conn_changed(void);
 void game_show(void);       void game_encoder(int dir);     void game_tick(void);
+void fps_show(void);        void fps_encoder(int dir);      void fps_tick(void);
