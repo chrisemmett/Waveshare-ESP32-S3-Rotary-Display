@@ -80,14 +80,24 @@ which is the only thing a knob is good at. Touch is limited to **tap to start**,
 
 Imps chase you across a 24×24 arena in escalating waves (`3 + wave` of them, up to
 8). They're deliberately *almost as fast as you* — and faster from wave 5 — because
-if you could outrun everything there'd be no reason to ever turn. Clearing a wave
-heals you 15 HP. The status bar under the viewport tracks health, wave, and kills.
+if you could outrun everything there'd be no reason to ever turn. The status bar
+under the viewport tracks health, wave, and kills.
+
+Clearing a wave buys you a **60-second breather** with nothing hunting you and a
+single **medkit** dropped somewhere on the floor, at least 5 cells away. Run over
+it and you're back to **full health** — it's the only healing in the game, so the
+gap is spent searching, and a pack you don't find is a pack you don't get. The
+status bar swaps to the countdown for the duration: `MEDKIT OUT 43s` while it's
+still out there, `WAVE 3 IN 21s` once you've grabbed it. The next wave arrives on
+the 60-second mark either way.
 
 The view is a **textured raycaster with billboarded sprites**: running-bond brick
 walls with distance and side shading, floor/ceiling gradients, a depth-sorted
 sprite pass against the wall z-buffer, a bobbing shotgun, muzzle flash, a white
-flash when an imp takes a hit, a melt-into-the-floor death, and a dithered red rim
-vignette when *you* get hit (gold when a wave clears).
+flash when an imp takes a hit, a melt-into-the-floor death, a hovering medkit that
+throbs instead of distance-shading so it stays legible across the arena, and a
+dithered red rim vignette when *you* get hit (gold when a wave clears, green when
+you pick the medkit up).
 
 **It does not render through LVGL.** The 3D view is drawn into a ~20 KB
 DMA-capable band buffer and pushed straight at the panel with `appBlit()`, ten
@@ -295,8 +305,10 @@ per detent.
 - **Timer step / max?** `TM_STEP` and `TM_MAX` in `ui_timer.cpp`.
 - **Dial of Doom too hard / turning mirrored?** All the knobs are `#define`s at the
   top of `ui_fps.cpp`: `TURN_PER_DETENT` and `TURN_LERP` for the feel of the dial,
-  `MOVE_SPEED` vs `ENEMY_SPEED*` for the chase, `ENEMY_DAMAGE` / `ENEMY_HIT_MS` /
-  `WAVE_HEAL` for difficulty, and `FPS_INVERT_DIR` if clockwise turns you left.
+  `MOVE_SPEED` vs `ENEMY_SPEED*` for the chase, `ENEMY_DAMAGE` / `ENEMY_HIT_MS`
+  for difficulty, `WAVE_GAP_MS` / `PACK_HEAL` / `PACK_MIN_D` / `PACK_MAX_D` for how
+  long and how generous the medkit breather is, and `FPS_INVERT_DIR` if clockwise
+  turns you left.
   `VP_H` trades 3D-view height against status-bar room; `BAND_H` trades RAM for
   the number of panel transfers per frame.
 - **Haptic feel?** The `HAPTIC_FX_*` effect ids in `haptics.h`.

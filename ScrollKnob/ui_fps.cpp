@@ -42,7 +42,11 @@
 #define STRAGGLER_BOOST 1.6f
 #define STUCK_MS 7000           // no progress for this long -> relocate the imp
 #define SLIDE_MS 1200           // wall-hug commitment, long enough to round a corner
-#define WAVE_HEAL 15            // clearing a wave patches you up a little
+#define WAVE_GAP_MS 60000       // breather between waves - go find the medkit
+#define PACK_HEAL 100           // the pack is all-or-nothing: back to full
+#define PACK_MIN_D 5.0f         // spawn distance from the player, so it must be found
+#define PACK_MAX_D 16.0f
+#define PACK_PICKUP_R 0.55f     // you auto-run, so the grab radius is generous
 #define HURT_FLASH_MS 110       // enemy white-flash after taking a hit
 #define DIE_MS 380              // melt-into-the-floor time
 #define MAX_ENEMY 8
@@ -146,6 +150,29 @@ static const char *const GUN[GUN_H] = {
   "  kkkhhhhhwwwwwwwwhhhhhkkk  ",
 };
 
+// Medkit: a white case with a red cross and a carry handle. Drawn through the
+// same billboard path as the imps, just shorter and pinned to the floor.
+#define PACK_W 16
+#define PACK_H 14
+#define PACK_SCALE 0.34f  // fraction of a full cell height, so it reads as a box
+#define PACK_HOVER 0.10f  // bob amplitude, also as a fraction of a cell
+static const char *const PACK[PACK_H] = {
+  "     gggggg     ",
+  "     gg  gg     ",
+  "  kkkkkkkkkkkk  ",
+  " kwwwwwwwwwwwwk ",
+  " kwwwwwwwwwwwwk ",
+  " kwwwwwRRwwwwwk ",
+  " kwwwwwRRwwwwwk ",
+  " kwwRRRRRRRRwwk ",
+  " kwwRRRRRRRRwwk ",
+  " kwwwwwRRwwwwwk ",
+  " kwwwwwRRwwwwwk ",
+  " kWWWWWWWWWWWWk ",
+  " kWWWWWWWWWWWWk ",
+  "  kkkkkkkkkkkk  ",
+};
+
 // ============================ State ============================
 enum FpsState { FPS_READY, FPS_PLAY, FPS_DEAD };
 
@@ -170,6 +197,14 @@ static int s_hp, s_kills, s_wave;
 static uint32_t s_lastMs, s_fireAt, s_flashAt;
 static Enemy s_en[MAX_ENEMY];
 
+// Between-waves breather. The arena is empty for WAVE_GAP_MS and a single medkit
+// is out there somewhere; walk over it and you're back to full.
+static bool s_gap;
+static uint32_t s_gapUntil;
+static bool s_packAlive;
+static float s_packX, s_packY;
+static int s_hudSec;  // last countdown second painted into the status bar
+
 // Radial screen tint (damage = red, new wave = gold), dithered over the rim.
 static uint32_t s_tintFrom, s_tintTo;
 static uint16_t s_tintCol;
@@ -191,7 +226,11 @@ static float s_dirX, s_dirY, s_planeX, s_planeY;
 #define NSHADE 8
 static uint16_t s_impPal[NSHADE + 1][8];
 static uint16_t s_gunPal[8];
-static uint8_t s_impIdx[128], s_gunIdx[128];
+// The medkit ignores distance shading and pulses instead - a pickup you have to
+// find has to stay legible at the far end of the arena.
+#define NPULSE 3
+static uint16_t s_packPal[NPULSE][8];
+static uint8_t s_impIdx[128], s_gunIdx[128], s_packIdx[128];
 
 // Ordered dither, so the rim tint costs a compare instead of a blend.
 static const uint8_t BAYER[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
@@ -283,6 +322,23 @@ static void buildPalettes(void) {
   s_gunIdx[(uint8_t)'k'] = 1; s_gunIdx[(uint8_t)'b'] = 2; s_gunIdx[(uint8_t)'g'] = 3;
   s_gunIdx[(uint8_t)'G'] = 4; s_gunIdx[(uint8_t)'w'] = 5; s_gunIdx[(uint8_t)'W'] = 6;
   s_gunIdx[(uint8_t)'h'] = 7;
+
+  static const uint32_t PACK_BASE[8] = {
+    0x000000,  // 0 = transparent
+    0x161a1c,  // k outline
+    0xf2f0ea,  // w case
+    0xc3bfb4,  // W case shadow
+    0xd8342a,  // R cross
+    0x000000,  // (unused)
+    0x000000,  // (unused)
+    0x8f959b,  // g handle
+  };
+  static const int PACK_LEVEL[NPULSE] = { 190, 224, 256 };
+  for (int p = 0; p < NPULSE; p++)
+    for (int i = 1; i < 8; i++) s_packPal[p][i] = shade(PACK_BASE[i], PACK_LEVEL[p]);
+  memset(s_packIdx, 0, sizeof(s_packIdx));
+  s_packIdx[(uint8_t)'k'] = 1; s_packIdx[(uint8_t)'w'] = 2; s_packIdx[(uint8_t)'W'] = 3;
+  s_packIdx[(uint8_t)'R'] = 4; s_packIdx[(uint8_t)'g'] = 7;
 }
 
 static void buildTables(void) {
@@ -313,10 +369,10 @@ static void buildTables(void) {
 }
 
 // ============================ Game logic ============================
-// Drop an imp on a random floor cell whose distance from the player is within
-// [minD, maxD]. Cell CENTRES only: on a cell corner the collision box straddles
-// four cells, and an imp born touching a wall never moves again.
-static bool placeEnemy(Enemy *e, float minD, float maxD) {
+// Find a random floor cell whose distance from the player is within [minD, maxD].
+// Cell CENTRES only: on a cell corner a collision box straddles four cells, and
+// an imp born touching a wall never moves again.
+static bool pickCell(float *ox, float *oy, float minD, float maxD) {
   for (int tries = 0; tries < 80; tries++) {
     float x = (float)(1 + (int)(appRandom() % (MAPW - 2))) + 0.5f;
     float y = (float)(1 + (int)(appRandom() % (MAPH - 2))) + 0.5f;
@@ -324,14 +380,25 @@ static bool placeEnemy(Enemy *e, float minD, float maxD) {
     float dx = x - s_px, dy = y - s_py;
     float d2 = dx * dx + dy * dy;
     if (d2 < minD * minD || d2 > maxD * maxD) continue;
-    e->x = x; e->y = y;
-    e->slide = 0;
-    e->slideUntil = 0;
-    e->bestD = 1e9f;
-    e->progressAt = millis();
+    *ox = x; *oy = y;
     return true;
   }
   return false;
+}
+
+static bool placeEnemy(Enemy *e, float minD, float maxD) {
+  if (!pickCell(&e->x, &e->y, minD, maxD)) return false;
+  e->slide = 0;
+  e->slideUntil = 0;
+  e->bestD = 1e9f;
+  e->progressAt = millis();
+  return true;
+}
+
+// The medkit goes anywhere on the floor that isn't within arm's reach, so the
+// breather is actually spent looking for it.
+static void spawnPack(void) {
+  s_packAlive = pickCell(&s_packX, &s_packY, PACK_MIN_D, PACK_MAX_D);
 }
 
 static void spawnWave(void) {
@@ -354,6 +421,9 @@ static void newGame(void) {
   s_lastMs = millis();
   s_fireAt = 0; s_flashAt = 0;
   s_tintFrom = s_tintTo = 0;
+  s_gap = false; s_gapUntil = 0;
+  s_packAlive = false;
+  s_hudSec = -1;
   spawnWave();
 }
 
@@ -483,11 +553,31 @@ static void stepEnemies(uint32_t now, float dt) {
     }
   }
 
-  if (liveCount == 0 && s_hp > 0) {
-    s_wave++;
-    s_hp += WAVE_HEAL;              // a breather between waves, Doom-style pickup
-    if (s_hp > 100) s_hp = 100;
+  if (liveCount == 0 && !s_gap && s_hp > 0) {
+    // Wave down. Nothing chases you for the next minute; the only thing in the
+    // arena is one medkit, and finding it is the whole point of the breather.
+    s_gap = true;
+    s_gapUntil = now + WAVE_GAP_MS;
     setTint(be565(230, 168, 70), 420);
+    spawnPack();
+  }
+}
+
+// The gap: run the clock, and see whether you've run over the medkit yet.
+static void stepGap(uint32_t now) {
+  if (s_packAlive) {
+    float dx = s_packX - s_px, dy = s_packY - s_py;
+    if (dx * dx + dy * dy <= PACK_PICKUP_R * PACK_PICKUP_R) {
+      s_packAlive = false;
+      s_hp = PACK_HEAL;
+      setTint(be565(70, 210, 120), 420);
+      appHapticPress();
+    }
+  }
+  if ((int32_t)(now - s_gapUntil) >= 0) {
+    s_gap = false;
+    s_packAlive = false;  // anything left behind goes with the wave
+    s_wave++;
     spawnWave();
   }
 }
@@ -569,8 +659,14 @@ static void drawWalls(int y0) {
 }
 
 // Billboarded sprites, resolved once per frame and then rasterised per band.
-struct Spr { int left, top, w, h, srcH; float depth; const uint16_t *pal; };
-static Spr s_spr[MAX_ENEMY];
+struct Spr {
+  int left, top, w, h, srcW, srcH;
+  float depth;
+  const uint16_t *pal;
+  const char *const *art;  // indexed bitmap rows
+  const uint8_t *idx;      // char -> palette index
+};
+static Spr s_spr[MAX_ENEMY + 1];  // + the medkit
 static int s_nspr;
 
 static void prepSprites(uint32_t now, int horizon) {
@@ -605,14 +701,41 @@ static void prepSprites(uint32_t now, int horizon) {
     Spr *s = &s_spr[s_nspr++];
     s->left = cx - w / 2;
     s->top = bottom - h;
-    s->w = w; s->h = h; s->srcH = srcH;
+    s->w = w; s->h = h; s->srcW = IMP_W; s->srcH = srcH;
     s->depth = tz;
+    s->art = IMP; s->idx = s_impIdx;
     if (e->hurtAt && now < e->hurtAt) s->pal = s_impPal[NSHADE];
     else if (e->dieAt)               s->pal = s_impPal[0];
     else {
       int sh = NSHADE - 1 - (int)(tz * 0.55f);
       if (sh < 0) sh = 0; else if (sh > NSHADE - 1) sh = NSHADE - 1;
       s->pal = s_impPal[sh];
+    }
+  }
+
+  // The medkit. Same billboard maths, but a third of a cell tall, hovering just
+  // off the floor and pulsing rather than distance-shaded so it stays findable.
+  if (s_packAlive) {
+    float sx = s_packX - s_px, sy = s_packY - s_py;
+    float tx = invDet * (s_dirY * sx - s_dirX * sy);
+    float tz = invDet * (-s_planeY * sx + s_planeX * sy);
+    if (tz >= 0.25f) {
+      float full = (float)VP_H / tz;                    // a 1-cell-tall object
+      int h = (int)(full * PACK_SCALE);
+      int w = h * PACK_W / PACK_H;
+      int cx = (int)((float)(VP_W / 2) * (1.0f + tx / tz));
+      float hover = (0.5f + 0.5f * sinf((float)now * 0.0035f)) * PACK_HOVER;
+      int bottom = horizon + (int)(full * (0.5f - hover));
+      if (cx + w / 2 >= 0 && cx - w / 2 < VP_W && h >= 2 && w >= 1) {
+        Spr *s = &s_spr[s_nspr++];
+        s->left = cx - w / 2;
+        s->top = bottom - h;
+        s->w = w; s->h = h; s->srcW = PACK_W; s->srcH = PACK_H;
+        s->depth = tz;
+        s->art = PACK; s->idx = s_packIdx;
+        int k = (int)(now / 200) % 4;                   // 0,1,2,1 - a slow throb
+        s->pal = s_packPal[k < NPULSE ? k : NPULSE - 2];
+      }
     }
   }
 
@@ -632,7 +755,7 @@ static void drawSprites(int y0) {
     int ta = s->top > y0 ? s->top : y0;
     int tb = (s->top + s->h - 1) < y1 ? (s->top + s->h - 1) : y1;
     if (ta > tb) continue;
-    int32_t stepX = ((int32_t)IMP_W << 16) / s->w;
+    int32_t stepX = ((int32_t)s->srcW << 16) / s->w;
     int32_t stepY = ((int32_t)s->srcH << 16) / s->h;
 
     for (int Y = ta; Y <= tb; Y++) {
@@ -641,14 +764,14 @@ static void drawSprites(int y0) {
       if (xa > xb) continue;
       int32_t sy = ((Y - s->top) * stepY) >> 16;
       if (sy < 0) sy = 0; else if (sy >= s->srcH) sy = s->srcH - 1;
-      const char *srow = IMP[sy];
+      const char *srow = s->art[sy];
       uint16_t *row = s_band + (Y - y0) * VP_W;
       int32_t acc = (xa - s->left) * stepX;
       for (int x = xa; x <= xb; x++, acc += stepX) {
         if (s_zbuf[x] <= s->depth) continue;  // behind a wall
         int sxi = acc >> 16;
-        if (sxi < 0 || sxi >= IMP_W) continue;
-        uint8_t pi = s_impIdx[(uint8_t)srow[sxi]];
+        if (sxi < 0 || sxi >= s->srcW) continue;
+        uint8_t pi = s->idx[(uint8_t)srow[sxi]];
         if (pi) row[x] = s->pal[pi];
       }
     }
@@ -759,12 +882,30 @@ static void renderFrame(uint32_t now) {
 }
 
 // ============================ LVGL chrome ============================
+// Seconds left in the breather, rounded up, 0 when a wave is running.
+static int gapSecs(uint32_t now) {
+  if (!s_gap) return 0;
+  int32_t left = (int32_t)(s_gapUntil - now);
+  if (left < 0) left = 0;
+  return (int)((left + 999) / 1000);
+}
+
 static void updateHud(void) {
   lv_bar_set_value(s_hpBar, s_hp, LV_ANIM_OFF);
   uint32_t c = s_hp > 60 ? COL_GREEN : (s_hp > 25 ? COL_ACCENT : COL_RED);
   lv_obj_set_style_bg_color(s_hpBar, lv_color_hex(c), LV_PART_INDICATOR);
   char b[48];
-  snprintf(b, sizeof(b), "HP %d   WAVE %d   KILLS %d", s_hp, s_wave, s_kills);
+  if (s_gap) {
+    int secs = gapSecs(millis());
+    s_hudSec = secs;
+    // While the medkit is still out there, say so - the countdown alone doesn't
+    // tell you whether there's anything left to look for.
+    if (s_packAlive) snprintf(b, sizeof(b), "HP %d   MEDKIT OUT   %ds", s_hp, secs);
+    else             snprintf(b, sizeof(b), "HP %d   WAVE %d IN %ds", s_hp, s_wave + 1, secs);
+  } else {
+    s_hudSec = -1;
+    snprintf(b, sizeof(b), "HP %d   WAVE %d   KILLS %d", s_hp, s_wave, s_kills);
+  }
   lv_label_set_text(s_stat, b);
 }
 
@@ -782,7 +923,7 @@ static void showPanel(bool dead) {
     lv_obj_set_style_text_color(s_title, lv_color_hex(COL_ACCENT), 0);
     lv_obj_set_style_border_color(s_panel, lv_color_hex(COL_ACCENT), 0);
     lv_label_set_text(s_sub, "TAP TO START");
-    lv_label_set_text(s_hint, "TURN THE DIAL TO AIM\nYOU RUN AND FIRE ON YOUR OWN");
+    lv_label_set_text(s_hint, "TURN THE DIAL TO AIM\nYOU RUN AND FIRE ON YOUR OWN\nGRAB THE MEDKIT BETWEEN WAVES");
   }
   lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(s_panel);
@@ -861,7 +1002,7 @@ static void build(void) {
   s_sub = make_label(s_panel, "TAP TO START", &font_jbm_11, COL_TX);
   lv_obj_set_style_text_letter_space(s_sub, 2, 0);
   lv_obj_align(s_sub, LV_ALIGN_TOP_MID, 0, 66);
-  s_hint = make_label(s_panel, "TURN THE DIAL TO AIM\nYOU RUN AND FIRE ON YOUR OWN",
+  s_hint = make_label(s_panel, "TURN THE DIAL TO AIM\nYOU RUN AND FIRE ON YOUR OWN\nGRAB THE MEDKIT BETWEEN WAVES",
                       &font_sg_12, COL_DIM);
   lv_obj_set_style_text_align(s_hint, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_align(s_hint, LV_ALIGN_TOP_MID, 0, 100);
@@ -926,9 +1067,16 @@ void fps_tick(void) {
   if (s_bob > 2.0f * (float)M_PI) s_bob -= 2.0f * (float)M_PI;
 
   int hpWas = s_hp, killsWas = s_kills, waveWas = s_wave;
+  bool gapWas = s_gap, packWas = s_packAlive;
   autoFire(now);
   stepEnemies(now, dt);
-  if (s_hp != hpWas || s_kills != killsWas || s_wave != waveWas) updateHud();
+  if (s_gap) stepGap(now);
+  // The countdown ticks with no input behind it, so the status bar also has to
+  // repaint on the second, not just when something happens to you.
+  if (s_hp != hpWas || s_kills != killsWas || s_wave != waveWas ||
+      s_gap != gapWas || s_packAlive != packWas ||
+      (s_gap && gapSecs(now) != s_hudSec))
+    updateHud();
 
   renderFrame(now);
 
