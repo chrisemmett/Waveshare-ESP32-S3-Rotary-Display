@@ -5,7 +5,8 @@ knob** — a radial-arc launcher on its 360×360 round display with five apps:
 
 - **Scroll Wheel** — a Bluetooth-HID scroll controller for a laptop.
 - **Countdown** — a timer with a depleting progress ring and a flashing-green alarm.
-- **Safe Cracker** — crack a 5-tumbler combination by feel.
+- **Safe Cracker** — crack a 5-tumbler combination by feel, on a rendered
+  engraved dial that turns under your fingertips.
 - **Dial of Doom** — a textured-raycaster FPS played entirely on the dial.
 - **Settings** — brightness, haptics, screen sleep, and full Bluetooth control
   (discoverability, disconnect, and the paired-device list).
@@ -68,20 +69,42 @@ itself away after the usual 10 s. Tapping the centre clears it and restores the
 last duration. (The buzz still fires, as a bonus rather than the main event.)
 
 ### Safe Cracker
-A safe-cracking game (5-tumbler combo, dial 0–49, wraps). Rotate to hunt for each
-tumbler; a **listening waveform** and status label (`QUIET` → `GETTING WARMER` →
-`VERY STRONG`) strengthen as you near the target, and the detents **firm up
-under your fingertips** (a stronger haptic click) as you close in — you can feel
-the tumbler catch. Each tumbler must be approached from a required direction
-(alternating CW/ACW, shown by the arrow up top); arriving from the correct
-direction and **holding the dial still for 3 s** (a ring fills around the number)
-captures it — any movement cancels the hold. **Turn the wrong way and you trip
-the lock**: a red **LOCKOUT** flash + alarm buzz, and the whole game resets to the
-first tumbler (the combination stays the same). Five captures → **SAFE OPEN**.
-Five dots track progress. Tap **NEW** (top-left) — or tap the centre once
-open — to start a fresh game; **MENU** returns to the launcher. The combo
-can be printed to Serial with `GAME_DEBUG 1`; flip `GAME_INVERT_DIR` if clockwise
-feels reversed (all in `ui_game.cpp`).
+A safe-cracking game (5-tumbler combo, dial 0–49, wraps) played on a **real
+rendered dial**: the outer ring is an engraved metal face with 50 graduations,
+numerals every 5, brushed streaks and a bevelled bezel, turning under a fixed
+index at 12 o'clock. It rides a spring rather than snapping, so a single detent
+lands with a little settle (~160 ms) and a fast spin reads as a sweep. Numbers
+ascend anticlockwise around the face, which is what makes a clockwise turn of the
+knob rotate the dial clockwise — the way a real S&G dial behaves.
+
+Rotate to hunt for each tumbler; the ring's **inner halo** and the status label
+(`QUIET` → `GETTING WARMER` → `VERY STRONG`) strengthen as you near the target,
+and the detents **firm up under your fingertips** (a stronger haptic click) as
+you close in — you can feel the tumbler catch. Each tumbler must be approached
+from a required direction (alternating CW/ACW, shown by a short amber arc leaving
+the index); arriving from the correct direction and **holding the dial still for
+1.5 s** — a bright sweep fills clockwise around the ring — captures it, and any
+movement cancels the hold. **Turn the wrong way and you trip the lock**: the
+whole ring goes red and the dial **judders** on the spot, the alarm buzzes, and
+the game resets to the first tumbler (the combination stays the same). Five
+captures → **SAFE OPEN**: the ring turns green and the dial free-spins down to
+rest with the readout coasting along with it. Five dots track progress. Tap
+**NEW** — or tap the centre once open — to start a fresh game; **MENU** returns
+to the launcher. The combo can be printed to Serial with `GAME_DEBUG 1`; flip
+`GAME_INVERT_DIR` if clockwise feels reversed (all in `ui_game.cpp`).
+
+**Rendering.** Like the FPS, the dial does not go through LVGL. It is baked once
+into a **polar texture** (1200 angles × 47 radii of 4-bit material indices, 28 KB)
+and sampled per screen pixel through a lookup table that stores each pixel's
+screen angle, radius and pre-dithered light level (175 KB, PSRAM). Rotating is
+then just an offset into the angle axis, and re-colouring the entire ring —
+lockout red, vault green, a gold pulse per captured tumbler — is a 1 KB palette
+rebuild rather than a redraw. Bevel shading is baked into the pixel table because
+it is rotationally symmetric; the brushed streaks live in the texture because
+they turn with the metal. The two renderers **split the screen by radius**: the
+ring owns r ≥ 132, LVGL owns the disc inside it, and LVGL content is kept inside
+r ≤ 112 because bands straddling the top or bottom of that hole are blitted
+full-width. Nothing is pushed at all while the dial is at rest.
 
 ### Dial of Doom
 A first-person shooter whose **only control is the dial**. You **auto-run forward**
@@ -205,9 +228,11 @@ Everything is in [`ScrollKnob/`](ScrollKnob):
   and forwards input to the UI via `ui.h`.
 - `ui.cpp` + `ui_launcher.cpp` / `ui_scroll.cpp` / `ui_timer.cpp` /
   `ui_settings.cpp` / `ui_bt.cpp` / `ui_game.cpp` / `ui_fps.cpp` — the LVGL screens (see
-  `ui_internal.h` for shared tokens). `ui_fps.cpp` is the odd one out: it owns a
-  raycaster that writes RGB565 bands and hands them to `appBlit()` rather than
-  drawing through LVGL (see [Dial of Doom](#dial-of-doom)).
+  `ui_internal.h` for shared tokens). `ui_fps.cpp` and `ui_game.cpp` are the odd
+  ones out: both write RGB565 straight to the panel via `appBlit()` instead of
+  drawing through LVGL — a raycaster viewport in the first (see
+  [Dial of Doom](#dial-of-doom)), a polar-sampled dial ring in the second (see
+  [Safe Cracker](#safe-cracker)).
 - `haptics.cpp` / `haptics.h` — minimal DRV2605 driver over the shared I²C bus.
 - `src/*.c` — LVGL fonts generated from Space Grotesk / JetBrains Mono by
   [`tools/gen_lvgl_fonts.sh`](tools/gen_lvgl_fonts.sh); declared in `fonts_knob.h`.

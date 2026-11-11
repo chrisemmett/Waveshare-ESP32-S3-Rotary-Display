@@ -92,6 +92,14 @@ void appBlit(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *px);
 // NULL if the request can't be satisfied.
 void *appDmaAlloc(uint32_t bytes);
 
+// Bulk working memory for generated lookup tables and textures - the Safe
+// Cracker's dial needs a couple of hundred KB of them. PSRAM first (internal
+// RAM is far too scarce for this), falling back to internal only if there is no
+// PSRAM at all. NOT DMA-capable: never hand this to appBlit(). Returns NULL if
+// the request can't be satisfied, and callers are expected to degrade rather
+// than fail.
+void *appBulkAlloc(uint32_t bytes);
+
 // Reset the idle-blank countdown. For screens that animate without input and
 // must not blank mid-frame (the FPS runs itself; only the dial is an input).
 void appKeepAwake(void);
